@@ -5,3 +5,4 @@
 *.gtf
 *.out
 db_eval/
+.vscode/settings.json

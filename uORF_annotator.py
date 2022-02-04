@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 import pandas as pd
 import numpy as np
+from collections import defaultdict
 from math import ceil
 from Bio import SeqIO
 from Bio.Seq import Seq, MutableSeq
@@ -74,10 +75,31 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 
 	check_cds_df = check_cds_df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']]
 
-	# gtf to bed
-	tmp_bed = NamedTemporaryFile()
-	sp.run(f"""grep -v '#' {gtf} | awk '$3~/CDS/ {{OFS="\t";print$1,$4-1,$5,$3}}' > {tmp_bed.name}""", shell=True)
+	# convert gtf to bed
+	# read gtf as tsv, skip all lines starting with '#'
+	df_gtf = pd.read_table(gtf, comment='#', header=None)
+	# subset only CDS annotation
+	df_gtf = df_gtf[df_gtf[2] == 'CDS']
+	# extract gene_id without quotes
+	df_gtf[8] = df_gtf[8].str.extract('gene_id [\'|\"]?([^;\"\']+)')
 
+	# create dict {'<gene_id>': [<chr>, <start>, <end>, info>]}
+	d = defaultdict(list)
+	for _, i in df_gtf.iterrows():
+		if i[8] in d:
+			if d[i[8]][1] > i[3]-1:
+				d[i[8]][1] = i[3]-1
+			if d[i[8]][2] < i[4]:
+				d[i[8]][2] = i[4]
+			continue
+		else:
+			d[i[8]] = [i[0], i[3]-1, i[4], i[6]]
+	# make dataframe from dict
+	d = pd.DataFrame(d).T
+	d[3] = d.index
+	# write temporary bed file
+	tmp_bed = NamedTemporaryFile()
+	pd.DataFrame(d).to_csv(tmp_bed.name, sep='\t', index=None, header=None)
 	# write VCF-header and VCF-body in temparary output file
 	tmp_vcf2 = NamedTemporaryFile()
 	tmp_tsv = NamedTemporaryFile()
