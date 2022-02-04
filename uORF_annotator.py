@@ -51,7 +51,6 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
 			shell=True)
 	record_dict = SeqIO.to_dict(SeqIO.parse(tmp_fasta.name, "fasta"))
 	
-	# df['INFO'] = df['INFO'].str.replace("[\'\"]$|^[\'\"]", "", regex=True)
 	# annotate variants
 	df[['symbol', 'consequence']] = df.apply(lambda x: annotate_variant(x, fasta_dict=record_dict), axis=1)
 	
@@ -72,7 +71,6 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 	check_cds_df['QUAL'] = '.'
 	check_cds_df['FILTER'] = '.'
 	check_cds_df['FORMAT'] = '.'
-	# check_cds_df['INFO'] = check_cds_df['INFO'].str.replace("[\'\"]$|^[\'\"]", "", regex=True)
 
 	check_cds_df = check_cds_df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']]
 
@@ -315,7 +313,6 @@ if __name__ == '__main__':
 		df['FILTER'] = '.'
 		df['FORMAT'] = '.'
 		df['INFO_new'] = df['INFO_new'].str.replace(',uBERT=', ',')
-		# df['INFO'] = df['INFO'].str.replace("[\'\"]$|^[\'\"]", "", regex=True)
 		df['INFO'] = df['INFO'].astype(str) + ';' + df['INFO_new'].astype(str)
 		df = df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']]
 
