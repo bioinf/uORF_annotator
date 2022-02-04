@@ -98,8 +98,8 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 	d = pd.DataFrame(d).T
 	d[3] = d.index
 	# write temporary bed file
-	tmp_bed = NamedTemporaryFile()
-	pd.DataFrame(d).to_csv(tmp_bed.name, sep='\t', index=None, header=None)
+	tmp_bed1 = NamedTemporaryFile()
+	pd.DataFrame(d).to_csv(tmp_bed1.name, sep='\t', index=None, header=None)
 	# write VCF-header and VCF-body in temparary output file
 	tmp_vcf2 = NamedTemporaryFile()
 	tmp_tsv = NamedTemporaryFile()
@@ -108,10 +108,14 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 		check_cds_df.to_csv(w, sep='\t', index=None)
 
 	# get intersection of current VCF and input GTF annotation
-	sp.run(f'bedtools intersect -wo -a {tmp_vcf2.name} -b {tmp_bed.name} | cut -f1,2,4,5 | sort -k1,1 -k2,2n -u > {tmp_tsv.name}', shell=True)
+	tmp_bed2 = NamedTemporaryFile()
+	sp.run(f'sort -k1,1 -k2,2n {tmp_bed1.name} | bedtools merge -i - | sort -k1,1 -k2,2n > {tmp_bed2.name}', shell=True)
+	sp.run(f'bedtools intersect -wo -a {tmp_vcf2.name} -b {tmp_bed2.name} | cut -f1,2,4,5 | sort -k1,1 -k2,2n > {tmp_tsv.name}', shell=True)
 	check_cds_df = pd.read_table(tmp_tsv.name, header=None)
 	check_cds_df.columns = ['#CHROM', 'POS', 'REF', 'ALT']
+	df.to_csv('df.tsv', sep='\t', index=None)
 	check_cds_df['overlapped_CDS'] = 'YES'
+	check_cds_df.to_csv('check_cds_df.tsv', sep='\t', index=None)
 	df = pd.merge(df, check_cds_df, on=['#CHROM', 'POS', 'REF', 'ALT'], how='left')
 	df = df.fillna({'overlapped_CDS':'NO'})
 
