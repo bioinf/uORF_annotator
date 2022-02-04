@@ -100,6 +100,15 @@ def check_overlapping(df, gtf, h):
 def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 	"""get a symbolic description of the mutations and consequences"""
 	
+	if x['ALT'] == '<DEL>':
+		symb = '<DEL_L>'
+		conseq = 'large_deletion'
+		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+	elif (len(x['REF']) > 1) & ((x['POS']<=x['orf_start']) | (x['POS']>x['orf_end'])):
+		symb = '<DELB>'
+		conseq = 'deletion_boundary'
+		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+
 	mnp_condition = (len(x['REF']) > 1) & (len(x['ALT']) > 1)
 	if  mnp_condition:
 		symb = '<MNP>'
@@ -177,12 +186,8 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 			block_ranges['int_sum'] = (block_ranges['int_end'].shift(1) - block_ranges['int_start'].shift(1)).cumsum()                              
 			intron_nucl_count = block_ranges[block_ranges.eval(f'(ex_start <= {x["dist_from_orf_to_snp"]}) & '
 															f'({x["dist_from_orf_to_snp"]} < ex_end)')]['int_sum'].tolist()
-			try:
-				intron_nucl_count = 0 if (np.isnan(intron_nucl_count[0])) | (len(intron_nucl_count) == 0) else intron_nucl_count[0]
-			except:
-				symb = '<DEL_L>'
-				conseq = 'large_deletion'
-				return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+
+			intron_nucl_count = 0 if (np.isnan(intron_nucl_count[0])) | (len(intron_nucl_count) == 0) else intron_nucl_count[0]
 
 			# reformat snp distance from snp[orf_coord] to snp[cds_coord]
 			x['dist_from_orf_to_snp'] = x['dist_from_orf_to_snp'] - intron_nucl_count

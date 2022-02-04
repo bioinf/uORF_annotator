@@ -1,0 +1,7 @@
+*.bed
+*.vcf
+*.tsv
+*.tsv.gz
+*.gtf
+*.out
+db_eval/
