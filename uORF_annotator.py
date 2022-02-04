@@ -62,7 +62,7 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
 
 	return df
 
-def check_overlapping(df, gtf, h):
+def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 	"""mark whether variants intersect with the GTF-annotation"""
 
 	# add rest obligate VCF-fields
@@ -100,6 +100,7 @@ def check_overlapping(df, gtf, h):
 def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 	"""get a symbolic description of the mutations and consequences"""
 	
+	# checking for the effect of large deletions
 	if x['ALT'] == '<DEL>':
 		symb = '<DEL_L>'
 		conseq = 'large_deletion'
@@ -109,6 +110,7 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 		conseq = 'deletion_boundary'
 		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
 
+	# excluding of multinucleotide polymorphism
 	mnp_condition = (len(x['REF']) > 1) & (len(x['ALT']) > 1)
 	if  mnp_condition:
 		symb = '<MNP>'
