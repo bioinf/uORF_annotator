@@ -14,7 +14,7 @@ conda env create -f requirements.yml
 python uORF_annotator.py \
     -i <input_variants.vcf> \
     -b <input_uORFs.bed> \
-    -g <input_annotation.gtf>
+    -g <input_annotation.gtf> \
     -f <human_genome.fasta> \
     -ot <output.tsv> \
     -ov <output.vsc>
