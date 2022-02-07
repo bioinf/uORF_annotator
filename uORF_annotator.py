@@ -375,6 +375,7 @@ if __name__ == '__main__':
 		# write VCF-header and VCF-body in output file
 		with open(output_vcf, 'a') as w:
 			w.write(h)
+			w.write('\n')
 			df.to_csv(w, sep='\t', index=None)
 	# run analysis
 	main()
