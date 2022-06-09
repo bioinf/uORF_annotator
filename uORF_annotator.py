@@ -40,29 +40,63 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
 
 	df = pd.concat([df, bed_4col_values], axis=1)
 
+	df['POS'] == df['POS'].astype(int)
+	df['orf_start'] == df['orf_start'].astype(int)
+	df['orf_end'] == df['orf_end'].astype(int)
+
 	# estimate distance
 	df['dist_from_orf_to_snp'] = df.apply(lambda x: x.loc['POS'] - x.loc['orf_start'] - 1 if \
 												x.loc['strand'] == '+' else \
 												x.loc['orf_end'] - x.loc['POS'],
 												axis = 1)
+	df['dist_from_orf_to_snp'] = df['dist_from_orf_to_snp'].astype(int)
 
 	# obtaining sequences from the corresponding reference genome
 	tmp_fasta = NamedTemporaryFile()
 	sp.run(f'rm -f {fasta}.fai && bedtools getfasta -s -fi {fasta} -bed {bed} > {tmp_fasta.name} 2>/dev/null',
 			shell=True)
-	record_dict = SeqIO.to_dict(SeqIO.parse(tmp_fasta.name, "fasta"))
-	
+	uorf_dict = SeqIO.to_dict(SeqIO.parse(tmp_fasta.name, "fasta"))
+
+	tmp = NamedTemporaryFile()
+	tmp1 = NamedTemporaryFile()
+	tmp_interorfs_fasta = NamedTemporaryFile()
+
+	df['zero'] = 0
+	df = df.astype({'orf_start':'int32', 'orf_end':'int32'})
+	df['name'] = df['#CHROM'] + ':' + df['orf_start'].astype(str) + '-' + df['orf_end'].astype(str) + '(' + df['strand'] + ')'
+	df.to_csv('check_temp_df.tsv', header=None, sep='\t', index=False)
+	df.loc[:, ['#CHROM', 'orf_start', 'orf_end', 'name', 'zero', 'strand']]\
+		.to_csv(tmp.name, header=None, sep='\t', index=False)
+
+	sp.run(f'sort -k1,1 -k2,2n {tmp.name} > {tmp1.name}', shell=True)
+
+	command = f"""rm -f {fasta}.fai && cat {gtf} | awk '$3~/CDS/' | awk '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | awk '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | bedtools getfasta -bed - -fi {fasta} -s -name | sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
+	sp.run(command, shell=True)
+
+	seen = set()
+	records = []
+
+	for record in SeqIO.parse(tmp_interorfs_fasta.name, "fasta"):  
+		if record.name not in seen:
+			seen.add(record.name)
+			records.append(record)
+
+	interorfs_dict = SeqIO.to_dict(records)
+
 	# annotate variants
-	df[['symbol', 'consequence']] = df.apply(lambda x: annotate_variant(x, fasta_dict=record_dict), axis=1)
-	
+	df[['symbol', 'consequence', 'main_cds_effect']] = df.apply(lambda x: annotate_variant(x, \
+											uorf_dict=uorf_dict, interorfs_dict=interorfs_dict),
+											axis=1)
+
 	# check overlapping with gtf annotation of CDS
 	df['overlapped_CDS'] = ''
+	df['additional_info'] = ''
 	if gtf is not None:
-		df = check_overlapping(df, gtf, h)
+		df = check_overlapping(df, gtf, h, fasta, bed_4col_info_cols)
 
 	return df
 
-def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
+def check_overlapping(df, gtf, h, fasta, bed_4col_info_cols) -> pd.core.frame.DataFrame:
 	"""mark whether variants intersect with the GTF-annotation"""
 
 	# add rest obligate VCF-fields
@@ -74,7 +108,6 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 	check_cds_df['FORMAT'] = '.'
 
 	check_cds_df = check_cds_df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']]
-
 
 	# convert gtf to bed
 	# read gtf as tsv, skip all lines starting with '#'
@@ -135,32 +168,40 @@ def check_overlapping(df, gtf, h) -> pd.core.frame.DataFrame:
 	df = pd.merge(df, check_cds_df2, on=['#CHROM', 'POS', 'REF', 'ALT'], how='left')
 	df = df.fillna({'in_known_CDS':'NO'})
 	df.loc[df['in_known_ORF'] == 'NO', 'in_known_CDS'] = 'NO'
+
 	return df
 
 
-def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
+def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
 	"""get a symbolic description of the mutations and consequences"""
-	
+
+	main_cds_effect = ''
+
 	# checking for the effect of large deletions
 	if x['ALT'] == '<DEL>':
 		symb = '<DEL_L>'
 		conseq = 'large_deletion'
-		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+		return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
+
 	elif (len(x['REF']) > 1) & ((x['POS']<=x['orf_start']) | (x['POS']>x['orf_end'])):
 		symb = '<DELB>'
 		conseq = 'deletion_boundary'
-		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+		return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
 
 	# excluding of multinucleotide polymorphism
 	mnp_condition = (len(x['REF']) > 1) & (len(x['ALT']) > 1)
 	if  mnp_condition:
 		symb = '<MNP>'
 		conseq = 'multinucleotide_polymorphism'
-		return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+		return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
 
 	# get fasta sequence of current ORF
-	orf = fasta_dict[f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"]
-	
+	orf = uorf_dict[f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"]
+	cds = Seq(orf.seq)
+
+	diff = abs(len(x['REF']) - len(x['ALT']))
+	del_end_intron = False
+
 	if x['n_exons'] == 1:
 		# get position of nucl in codon
 		x['codon_pos'] = x['dist_from_orf_to_snp'] % 3
@@ -214,7 +255,7 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 		if splice_condition:
 			symb = '<SP>'
 			conseq = 'splice_variant'
-			return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+			return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
 
 		# is SNP in intron?
 		intron_condition = len(block_ranges[block_ranges.eval(f'(int_start <= {x["dist_from_orf_to_snp"]}) & '
@@ -222,7 +263,7 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 		if intron_condition:
 			symb = '<INT>'
 			conseq = 'intronic_variant'
-			return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+			return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
 
 		else:
 			# get intronic nucleotide counts before exon with SNP
@@ -231,6 +272,15 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 															f'({x["dist_from_orf_to_snp"]} < ex_end)')]['int_sum'].tolist()
 
 			intron_nucl_count = 0 if (np.isnan(intron_nucl_count[0])) | (len(intron_nucl_count) == 0) else intron_nucl_count[0]
+
+			if len(x['REF']) > len(x['ALT']):
+				if x['strand'] == "+":
+					del_end_pos = x["dist_from_orf_to_snp"] + diff
+				else:
+					del_end_pos = x["dist_from_orf_to_snp"] - diff
+					del_end_intron = len(block_ranges[block_ranges.eval(f'(int_start <= {del_end_pos}) & '
+															f'({del_end_pos} < int_end)')]) != 0
+		
 
 			# reformat snp distance from snp[orf_coord] to snp[cds_coord]
 			x['dist_from_orf_to_snp'] = x['dist_from_orf_to_snp'] - intron_nucl_count
@@ -255,7 +305,6 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 	alt_codon = MutableSeq(ref_codon)
 
 	# main condition
-	diff = abs(len(x['REF']) - len(x['ALT']))
 	# classify mutations into consequence groups
 	if diff == 0:
 		# insert mutation in reference codon and get new aminoacid or stop-codon
@@ -276,6 +325,7 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 		elif (ref_aa == '*') & (alt_aa != '*'):
 			symb = f'*{aa_pos}{alt_aa}'
 			conseq = 'stop_lost'
+			alt_seq = str(alt_codon)
 		elif (ref_aa != alt_aa) & (alt_aa == '*'):
 			symb = f'{ref_aa}{aa_pos}*'
 			conseq = 'stop_gained'
@@ -293,11 +343,49 @@ def annotate_variant(x, fasta_dict) -> pd.core.series.Series:
 		conseq = 'inframe_insertion'
 
 	elif diff % 3 != 0:
-		symb = '<FS>'
-		conseq = 'frameshift'
+		if del_end_intron:
+			symb = '<EMD>'
+			conseq = 'deletion_at_exon_margin'
+		else:	
+			symb = '<FS>'
+			conseq = 'frameshift'
+			x['dist_from_orf_to_snp'] = int(x['dist_from_orf_to_snp'])
+			if len(x['ALT']) > len(x['REF']):
+				if x['strand'] == "+":
+					alt_seq = str(cds[:x['dist_from_orf_to_snp']] + Seq(x['ALT']) + cds[x['dist_from_orf_to_snp'] + 1:])
+				elif x['strand'] == '-':
+					alt_seq = str(cds[:x['dist_from_orf_to_snp']] + Seq(x['ALT']).reverse_complement() + cds[x['dist_from_orf_to_snp'] + 1:])
+
+				alt_seq = Seq(alt_seq)
+			else:
+				if x['strand'] == "+":
+					alt_seq = str(cds[:x['dist_from_orf_to_snp']] + Seq(x['ALT']) + cds[x['dist_from_orf_to_snp'] + len(x['ALT']):])
+				elif x['strand'] == '-':
+					alt_seq = str(cds[:x['dist_from_orf_to_snp'] - diff] + Seq(x['ALT']).reverse_complement() + cds[x['dist_from_orf_to_snp'] + 1:])
+
+	if (conseq == 'stop_lost') | (conseq == 'frameshift'):
+
+		try:
+			interorf = interorfs_dict[f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"].seq
+
+			checkseq = alt_seq + str(interorf)
+
+			ss = Seq(checkseq[0:-(len(checkseq)%3)])
+			sstr = ss.translate()
+
+			if '*' in sstr:
+				main_cds_effect = 'uORF_product_extansion'
+			else:
+				if len(checkseq)%3==0:
+					main_cds_effect = 'N_terminal_extantion'
+				else:
+					main_cds_effect = 'main_CDS_frameshift'
+
+		except KeyError:
+			pass
 
 	# return two columns: symbolic designation of variants and consequence group
-	return pd.Series([symb, conseq], index=['symbol', 'consequence'])
+	return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
 
 
 if __name__ == '__main__':
@@ -322,7 +410,7 @@ if __name__ == '__main__':
 			h = f.read()
 		# processing
 		df = process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h)
-		
+
 		df.drop_duplicates(subset=['#CHROM', 'POS', 'REF', 'ALT',
 					'orf_start', 'orf_end'], inplace=True)
 
@@ -340,6 +428,7 @@ if __name__ == '__main__':
 			f'{x["strand"]}|'
 			f'{x["symbol"]}|'
 			f'{x["consequence"]}|'
+			f'{x["main_cds_effect"]}|'
 			f'{x["in_known_CDS"]}|'
 			f'{x["in_known_ORF"]}' for x in df.to_dict(orient='records')]
 
@@ -371,7 +460,7 @@ if __name__ == '__main__':
 		# add header ##INFO uORF_annotator (uBERT) line
 		h += \
 		f'##INFO=<ID=uBERT,Number=.,Type=String,Description="Consequence uORF_annotator from uBERT. '
-		f'Format: ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|in_known_CDS|in_known_ORF{bed_4col_info}">'
+		f'Format: ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|main_cds_effect|in_known_CDS|in_known_ORF{bed_4col_info}">'
 		# write VCF-header and VCF-body in output file
 		with open(output_vcf, 'a') as w:
 			w.write(h)
