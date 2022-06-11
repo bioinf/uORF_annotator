@@ -3,7 +3,7 @@
 
 New in v. 0.2.1:
 * annotation of effect on main CDS for frameshift and stop codon loss variants in uORFs
-* fixed nubir issues with `frameshift` and `splice` variant annotations
+* fixed minor issues with incorrect annotation of variants as frameshift or splice site ones
 
 ## Conda environment
 Install all dependencies from `requirements.yml` as new conda environment.
