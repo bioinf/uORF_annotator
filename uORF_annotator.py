@@ -410,7 +410,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
                                 if len(checkseq)%3==0:
                                         main_cds_effect = 'N-terminal_extension'
                                 else:
-                                        main_cds_effect = 'out-of-frmae_overlap'
+                                        main_cds_effect = 'out-of-frame_overlap'
 
                 except KeyError:
                         pass
