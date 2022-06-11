@@ -14,7 +14,8 @@ conda env create -f requirements.yml
 * VCF file of variants for further annotation
 * BED file with available uORFs (`sorted.v3.bed` in this repository)
 * GTF file with genomic features annotation
-It is highly recommended to run the tool with a GTF file containing only canonical transcript isoforms for each gene (`RefSeq_mainIsoform.gtf` in this repository). If full GTF file is provided, effects of uORF variants on main CDS of the gene will be annotated with reference to the isoform with the closest start codon to uORF.
+
+It is highly recommended to run the tool **with a GTF file containing only canonical transcript isoforms for each gene** (`RefSeq_mainIsoform.gtf` in this repository). If full GTF file is provided, effects of uORF variants on main CDS of the gene will be annotated with reference to the isoform with the closest start codon to uORF.
 ## Run example
 ```
 python uORF_annotator.py \
@@ -45,7 +46,8 @@ Each row represents annotation of a single variant in particular uORF (per uORF 
 14) overlapping_type - type of uORF (overlapping/non-overlapping) from input `.bed` file  
 15) codon_type - ATG or non-ATG start codon in uORF 
 16) dist_from_orf_to_snp - distance from start of uORF to variant position  
-17-18) technical columns
+17) technical column
+18) technical column
 19) symbol - schematic indication of the variant event  
 20) consequence - type of effect 
 21) main_cds_effect - effect of uORF variant on the main CDS (annotated for `frameshift` and `stop lost` variants only)
