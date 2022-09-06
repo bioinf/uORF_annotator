@@ -6,3 +6,7 @@
 db_eval/
 .vscode/settings.json
 *.bak
+bed_read.test.py
+.gitignore
+Homo_sapiens_assembly38.fasta.fai
+Homo_sapiens_assembly38.fasta
