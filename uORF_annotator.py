@@ -1,8 +1,10 @@
+from email.policy import default
 import subprocess as sp
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import pandas as pd
 import numpy as np
+import re
 from collections import defaultdict
 from math import ceil
 from Bio import SeqIO
@@ -60,6 +62,8 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
         tmp = NamedTemporaryFile()
         tmp1 = NamedTemporaryFile()
         tmp_exons_gtf = NamedTemporaryFile()
+        tmp_interorfs_bed = NamedTemporaryFile()
+        tmp_interorfs_bed_sorted = NamedTemporaryFile()
         tmp_interorfs_full_seq = NamedTemporaryFile()
         tmp_interorfs_fasta = NamedTemporaryFile()
 
@@ -73,8 +77,82 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
         sp.run(f'sort -k1,1 -k2,2n {tmp.name} > {tmp1.name}', shell=True)
         sp.run(f'grep -P "\texon\t" {gtf} | sort -k1,1 -k4,4n -u > {tmp_exons_gtf.name}', shell=True)
 
-        command = f"""rm -f {fasta}.fai && cat {gtf} | awk '$3~/CDS/' | awk '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | awk '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | sort -k1,1 -k2,2n | bedtools intersect -a - -b {tmp_exons_gtf.name} | bedtools getfasta -bed - -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
+        command = f"""rm -f {fasta}.fai && cat {gtf} | awk '$3~/CDS/' | awk '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | awk '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | sort -k1,1 -k2,2n | bedtools intersect -a - -b {tmp_exons_gtf.name} | tee {tmp_interorfs_bed.name} | bedtools getfasta -bed - -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
         sp.run(command, shell=True)
+        command = f"""cat {tmp_interorfs_bed.name} | sort -k1,1 -k2,2n | uniq > {tmp_interorfs_bed_sorted.name}"""
+        sp.run(command, shell=True)
+        ### uORF DATA ###
+        uorf_df = df.loc[:, ['#CHROM', 'POS', 'REF', 'ALT', 'exons_sizes', 'exons_starts', 'name']]
+        uorf_df.columns = ['#CHROM', 'POS', 'REF', 'ALT', 'exons_sizes', 'exons_starts', 'id']
+        print(' ======= uORF DATA ======= ')
+        print(uorf_df)
+        #################
+
+        ### INTERORF DATA ###
+        interorfs_bed_list = [line.rstrip().split('\t') for line in open(tmp_interorfs_bed_sorted.name).read().split('\n') if line != '' ]
+        interorfs_bed_dict = defaultdict(lambda: defaultdict(list))
+        for bed_line in interorfs_bed_list:
+                key = bed_line[3]
+                interorfs_bed_dict[key]['chr'] = bed_line[0]
+                interorfs_bed_dict[key]['strand'] = bed_line[-1]
+                interorfs_bed_dict[key]['exons_sizes'].append(int(bed_line[2])-int(bed_line[1]))
+                if interorfs_bed_dict[key]['strand'] ==  '+':
+                        interorfs_bed_dict[key]['exons_starts'].append(int(bed_line[1]))
+                elif interorfs_bed_dict[key]['strand'] ==  '-':
+                        interorfs_bed_dict[key]['exons_starts'].append(int(bed_line[2]))
+        for k in interorfs_bed_dict.keys():
+                if interorfs_bed_dict[k]['strand'] == '+':
+                        starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'])
+                        interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, interorfs_bed_dict[k]['exons_sizes']))]
+                        contig = interorfs_bed_dict[k]['chr']
+                        interorfs_bed_dict[k]['exons_starts'] = [i-starts_sorted[0] for i in starts_sorted]
+                elif interorfs_bed_dict[k]['strand'] == '-':
+                        starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'], reverse=True)
+                        interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, interorfs_bed_dict[k]['exons_sizes']))]
+                        contig = interorfs_bed_dict[k]['chr']
+                        interorfs_bed_dict[k]['exons_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+        interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
+        # interorfs_bed_df.columns = ['contig', 'start', 'end']
+        interorfs_bed_df['id'] = interorfs_bed_df.index
+        print(' ======= interORF DATA ======= ')
+        print(interorfs_bed_df)
+        #####################
+
+        # make per transcript exon dict (CDS-data)
+        exons_gtf_list = [line.rstrip().split('\t') for line in open(tmp_exons_gtf.name).read().split('\n') if line != '']
+        exons_gtf_dict = defaultdict(lambda: defaultdict(list))
+        idx = [False for _ in exons_gtf_list[0]]
+        idx[0], idx[3], idx[4], idx[6] = True, True, True, True
+        for gtf_line in exons_gtf_list:
+                key = re.search("transcript_id ([^;]+)", gtf_line[8]).group(1).strip('"')
+                values = [gtf_line_sub for i, gtf_line_sub in zip(idx, gtf_line) if i]
+                exons_gtf_dict[key]['chr'] = values[0]
+                exons_gtf_dict[key]['strand'] = values[-1]
+                exons_gtf_dict[key]['exons_sizes'].append(int(values[2])-int(values[1]))
+                if exons_gtf_dict[key]['strand'] == '+':
+                        exons_gtf_dict[key]['exons_starts'].append(int(values[1]))
+                elif exons_gtf_dict[key]['strand'] == '-':
+                        exons_gtf_dict[key]['exons_starts'].append(int(values[2]))
+        for k in exons_gtf_dict.keys():
+                if exons_gtf_dict[k]['strand'] == '+':
+                        starts_sorted = sorted(exons_gtf_dict[k]['exons_starts'])
+                        exons_gtf_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, exons_gtf_dict[k]['exons_sizes']))]
+                        contig = exons_gtf_dict[k]['chr']
+                        exons_gtf_dict[k]['id'] = f"{contig}:{starts_sorted[0]}(+)"
+                        exons_gtf_dict[k]['exons_starts'] = [i-starts_sorted[0] for i in starts_sorted]
+                elif exons_gtf_dict[k]['strand'] == '-':
+                        starts_sorted = sorted(exons_gtf_dict[k]['exons_starts'], reverse=True)
+                        exons_gtf_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, exons_gtf_dict[k]['exons_sizes']))]
+                        contig = exons_gtf_dict[k]['chr']
+                        exons_gtf_dict[k]['id'] = f"{contig}:{starts_sorted[0]}(-)"
+                        exons_gtf_dict[k]['exons_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+
+        ### CDS DATA ###
+        exons_gtf_df = pd.DataFrame(exons_gtf_dict).T
+        exons_gtf_df.index = exons_gtf_df['id']
+        print(' ======= CDS DATA ======= ')
+        print(exons_gtf_df)
+        ################
 
         seen_parts = set()
         records = []
