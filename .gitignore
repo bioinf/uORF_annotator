@@ -10,3 +10,4 @@ bed_read.test.py
 .gitignore
 Homo_sapiens_assembly38.fasta.fai
 Homo_sapiens_assembly38.fasta
+*run_notes.txt
