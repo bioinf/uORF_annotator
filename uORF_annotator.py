@@ -5,6 +5,7 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 import numpy as np
 import re
+import os
 from collections import defaultdict
 from math import ceil
 from Bio import SeqIO
@@ -12,7 +13,7 @@ from Bio.Seq import Seq, MutableSeq
 import click
 
 
-def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.DataFrame:
+def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_only) -> pd.core.frame.DataFrame:
         """find main values for further annotation"""
 
         tmp_vcf1 = NamedTemporaryFile()
@@ -66,6 +67,7 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
         tmp_interorfs_bed_sorted = NamedTemporaryFile()
         tmp_interorfs_full_seq = NamedTemporaryFile()
         tmp_interorfs_fasta = NamedTemporaryFile()
+        closest_cds_data = NamedTemporaryFile()
 
         df['zero'] = 0
         df = df.astype({'orf_start':'int32', 'orf_end':'int32'})
@@ -75,17 +77,19 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
                 .to_csv(tmp.name, header=None, sep='\t', index=False)
 
         sp.run(f'sort -k1,1 -k2,2n {tmp.name} > {tmp1.name}', shell=True)
-        sp.run(f'grep -P "\texon\t" {gtf} | sort -k1,1 -k4,4n -u > {tmp_exons_gtf.name}', shell=True)
+        sp.run(f'grep -P "\tCDS\t" {gtf} | sort -k1,1 -k4,4n -u > {tmp_exons_gtf.name}', shell=True)
 
-        command = f"""rm -f {fasta}.fai && cat {gtf} | awk '$3~/CDS/' | awk '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | awk '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | sort -k1,1 -k2,2n | bedtools intersect -a - -b {tmp_exons_gtf.name} | tee {tmp_interorfs_bed.name} | bedtools getfasta -bed - -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
+        command = f"""rm -f {fasta}.fai && cat {gtf} | awk -F '\t' '$3~/CDS/' | awk -F '\t' '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | tee {closest_cds_data.name} | awk -F '\t' '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | sort -k1,1 -k2,2n | bedtools intersect -a - -b {tmp_exons_gtf.name} | tee {tmp_interorfs_bed.name} | bedtools getfasta -bed - -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
         sp.run(command, shell=True)
         command = f"""cat {tmp_interorfs_bed.name} | sort -k1,1 -k2,2n | uniq > {tmp_interorfs_bed_sorted.name}"""
         sp.run(command, shell=True)
         ### uORF DATA ###
-        uorf_df = df.loc[:, ['#CHROM', 'POS', 'REF', 'ALT', 'exons_sizes', 'exons_starts', 'name']]
-        uorf_df.columns = ['#CHROM', 'POS', 'REF', 'ALT', 'exons_sizes', 'exons_starts', 'id']
-        print(' ======= uORF DATA ======= ')
-        print(uorf_df)
+        uorf_df = df.loc[:, ['#CHROM', 'POS', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name']]
+        uorf_df.columns = ['#CHROM', 'POS', 'orf_start', 'orf_end', 'exons_sizes', 'exons_norm_starts', 'id']
+        uorf_df['exons_starts'] = [(o + x for x in e) for o, e in zip(uorf_df['orf_start'], uorf_df['exons_norm_starts'])]
+        uorf_df.index = uorf_df['id']
+        #print(' ======= uORF DATA ======= ')
+        #print(uorf_df)
         #################
 
         ### INTERORF DATA ###
@@ -105,17 +109,17 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
                         starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'])
                         interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, interorfs_bed_dict[k]['exons_sizes']))]
                         contig = interorfs_bed_dict[k]['chr']
-                        interorfs_bed_dict[k]['exons_starts'] = [i-starts_sorted[0] for i in starts_sorted]
+                        interorfs_bed_dict[k]['exons_norm_starts'] = [i-starts_sorted[0] for i in starts_sorted]
                 elif interorfs_bed_dict[k]['strand'] == '-':
                         starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'], reverse=True)
-                        interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, interorfs_bed_dict[k]['exons_sizes']))]
+                        interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, reversed(interorfs_bed_dict[k]['exons_sizes'])))]
                         contig = interorfs_bed_dict[k]['chr']
-                        interorfs_bed_dict[k]['exons_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+                        interorfs_bed_dict[k]['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
         interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
         # interorfs_bed_df.columns = ['contig', 'start', 'end']
         interorfs_bed_df['id'] = interorfs_bed_df.index
-        print(' ======= interORF DATA ======= ')
-        print(interorfs_bed_df)
+        #print(' ======= interORF DATA ======= ')
+        #print(interorfs_bed_df)
         #####################
 
         # make per transcript exon dict (CDS-data)
@@ -128,9 +132,9 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
                 values = [gtf_line_sub for i, gtf_line_sub in zip(idx, gtf_line) if i]
                 exons_gtf_dict[key]['chr'] = values[0]
                 exons_gtf_dict[key]['strand'] = values[-1]
-                exons_gtf_dict[key]['exons_sizes'].append(int(values[2])-int(values[1]))
+                exons_gtf_dict[key]['exons_sizes'].append(int(values[2])-int(values[1]) + 1)
                 if exons_gtf_dict[key]['strand'] == '+':
-                        exons_gtf_dict[key]['exons_starts'].append(int(values[1]))
+                        exons_gtf_dict[key]['exons_starts'].append(int(values[1]) - 1)
                 elif exons_gtf_dict[key]['strand'] == '-':
                         exons_gtf_dict[key]['exons_starts'].append(int(values[2]))
         for k in exons_gtf_dict.keys():
@@ -139,19 +143,59 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
                         exons_gtf_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, exons_gtf_dict[k]['exons_sizes']))]
                         contig = exons_gtf_dict[k]['chr']
                         exons_gtf_dict[k]['id'] = f"{contig}:{starts_sorted[0]}(+)"
-                        exons_gtf_dict[k]['exons_starts'] = [i-starts_sorted[0] for i in starts_sorted]
+                        exons_gtf_dict[k]['exons_norm_starts'] = [i-starts_sorted[0] for i in starts_sorted]
                 elif exons_gtf_dict[k]['strand'] == '-':
+                        size_dict = {k: v for k, v in zip(exons_gtf_dict[k]['exons_starts'], exons_gtf_dict[k]['exons_sizes'])}
                         starts_sorted = sorted(exons_gtf_dict[k]['exons_starts'], reverse=True)
-                        exons_gtf_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, exons_gtf_dict[k]['exons_sizes']))]
+                        exons_gtf_dict[k]['exons_starts'] = starts_sorted
+                        exons_gtf_dict[k]['exons_sizes'] = [size_dict[x] for x in starts_sorted]
                         contig = exons_gtf_dict[k]['chr']
                         exons_gtf_dict[k]['id'] = f"{contig}:{starts_sorted[0]}(-)"
-                        exons_gtf_dict[k]['exons_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+                        exons_gtf_dict[k]['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
 
-        ### CDS DATA ###
+        ### Get sequences of CDS
+        cds_fasta = NamedTemporaryFile()
+        get_cds_command = f"""rm -f {fasta}.fai && cat {gtf} | awk -F '\t' '$3~/CDS/' | awk -F '\t' '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools getfasta -bed - -fi {fasta} -s > {cds_fasta.name}"""
+        sp.run(get_cds_command, shell=True)
+        cds_seqs = []
+        for record in SeqIO.parse(cds_fasta.name, "fasta"):  
+            cds_seqs.append(record)
+
+        cds_dict = SeqIO.to_dict(cds_seqs)
+        
+        def create_complete_cds(chrom, strand, eStarts, eSizes):
+                if chrom in ['chrM', 'chrMT', 'M', 'MT']:
+                        return None
+                out_seq = ''
+                for i, j in zip(eStarts, eSizes):
+                        if strand == '+':
+                                out_seq += cds_dict[f'{chrom}:{i}-{i+j}({strand})'].seq
+                        else:
+                                out_seq += cds_dict[f'{chrom}:{i-j}-{i}({strand})'].seq
+                return out_seq
+        
+        for k in exons_gtf_dict.keys():
+                echrom = exons_gtf_dict[k]['chr']
+                estrand = exons_gtf_dict[k]['strand']
+                estarts = exons_gtf_dict[k]['exons_starts']
+                esizes = exons_gtf_dict[k]['exons_sizes']
+                exons_gtf_dict[k]['seq'] = str(create_complete_cds(echrom, estrand, estarts, esizes))
+        
+        closest_cds_dict = defaultdict(str)
+        with open(closest_cds_data.name, 'r') as uorf_cds_handle:
+                for line in uorf_cds_handle:
+                        content = line.strip().split('\t')
+                        if content[5] == "+":
+                                exStart = content[7]
+                        else:
+                                exStart = content[8]
+                        closest_cds_dict[content[3]] = f"{content[0]}:{exStart}({content[5]})"
+
         exons_gtf_df = pd.DataFrame(exons_gtf_dict).T
         exons_gtf_df.index = exons_gtf_df['id']
-        print(' ======= CDS DATA ======= ')
-        print(exons_gtf_df)
+        #print(' ======= CDS DATA ======= ')
+        #print(exons_gtf_df)
+        exons_gtf_df.to_csv('look_at_me.tsv', sep='\t', index=False)
         ################
 
         seen_parts = set()
@@ -191,7 +235,13 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h) -> pd.core.frame.
 
         # annotate variants
         df[['symbol', 'consequence', 'main_cds_effect']] = df.apply(lambda x: annotate_variant(x, \
-                                                                                        uorf_dict=uorf_dict, interorfs_dict=interorfs_dict),
+                                                                                        uorf_dict=uorf_dict, \
+                                                                                        interorfs_dict=interorfs_dict, \
+                                                                                        interorfs_bed_df=interorfs_bed_df, \
+                                                                                        uorf_df=uorf_df, \
+                                                                                        cds_df=exons_gtf_df, \
+                                                                                        closest_cds_dict=closest_cds_dict, \
+                                                                                        output_bed=output_bed, atg_only=atg_only),
                                                                                         axis=1)
 
         # check overlapping with gtf annotation of CDS
@@ -278,7 +328,7 @@ def check_overlapping(df, gtf, h, fasta, bed_4col_info_cols) -> pd.core.frame.Da
         return df
 
 
-def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
+def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cds_df, closest_cds_dict, output_bed, atg_only) -> pd.core.series.Series:
         """get a symbolic description of the mutations and consequences"""
 
         main_cds_effect = ''
@@ -306,6 +356,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
         cds = Seq(orf.seq)
 
         diff = abs(len(x['REF']) - len(x['ALT']))
+        signed_diff = len(x['REF']) - len(x['ALT'])
         del_end_intron = False
 
         if x['n_exons'] == 1:
@@ -431,7 +482,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
                 elif (ref_aa == '*') & (alt_aa != '*'):
                         symb = f'*{aa_pos}{alt_aa}'
                         conseq = 'stop_lost'
-                        alt_seq = str(alt_codon)
+                        alt_seq = cds[:-3] + str(alt_codon)
                 elif (ref_aa != alt_aa) & (alt_aa == '*'):
                         symb = f'{ref_aa}{aa_pos}*'
                         conseq = 'stop_gained'
@@ -471,27 +522,163 @@ def annotate_variant(x, uorf_dict, interorfs_dict) -> pd.core.series.Series:
 
         if (conseq == 'stop_lost') | (conseq == 'frameshift'):
 
+                def get_intron_ln(exon_starts, exon_sizes):
+                        if len(exon_sizes) == 1:
+                                return []
+                        return [exon_starts[i + 1] - exon_starts[i] - exon_sizes[i] for i in range(len(exon_sizes) - 1)]
+
+                
+                uorf_name = f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"
+                uorf_len = int(x.loc['orf_end']) - int(x.loc['orf_start'])
+
+                uorf_df_row = uorf_df.drop_duplicates(subset='id', keep='last').loc[uorf_name]
+                ORFExonSizes = uorf_df_row['exons_sizes']
+                ORFExonStarts = uorf_df_row['exons_starts']
+                ORFExonNormStarts = uorf_df_row['exons_norm_starts']
+
+                if x['strand'] == '-':
+                        ORFExonNormStarts = list(reversed([uorf_len - x - y for x, y in zip(ORFExonSizes, ORFExonNormStarts)]))
+                        ORFExonSizes = list(reversed(ORFExonSizes))
+                        true_uorf_start = x.loc['orf_end']
+                        true_uorf_end = x.loc['orf_start']
+                else:
+                        true_uorf_start = x.loc['orf_start']
+                        true_uorf_end = x.loc['orf_end']
+
+                ORFIntronSizes = get_intron_ln(exon_starts=ORFExonNormStarts, exon_sizes=ORFExonSizes)
+                
+                transcript_id = closest_cds_dict[uorf_name]
                 try:
-                        interorf = interorfs_dict[f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"].seq
-
-                        checkseq = alt_seq + str(interorf)
-
-                        if len(checkseq)%3 > 0:
-                            ss = Seq(checkseq[0:-(len(checkseq)%3)])
-                        else:
-                            ss = Seq(checkseq)
-                        sstr = ss.translate()
-
-                        if '*' in sstr:
-                                main_cds_effect = 'main_CDS_unaffected'
-                        else:
-                                if len(checkseq)%3==0:
-                                        main_cds_effect = 'N-terminal_extension'
-                                else:
-                                        main_cds_effect = 'out-of-frame_overlap'
-
+                        closest_cds_row = cds_df.loc[transcript_id]
+                        CDSExonSizes = closest_cds_row.loc['exons_sizes']
+                        CDSExonStarts = closest_cds_row.loc['exons_starts']
+                        CDSExonNormStarts = closest_cds_row.loc['exons_norm_starts']
+                        CDSIntronSizes = get_intron_ln(exon_starts=CDSExonNormStarts, exon_sizes=CDSExonSizes)
                 except KeyError:
-                        pass
+                        if x.loc['overlapping_type'] == 'non-overlapping':
+                                print(f'WARN Closest CDS is not the first one for non-overlappiong uORF {uorf_name}!')
+                        return pd.Series([symb, conseq, 'unassigned'], index=['symbol', 'consequence', 'main_cds_effect'])
+
+                try:
+                        _, _, IOExonSizes, IOExonStarts, IOExonNormStarts, _ = interorfs_bed_df.loc[uorf_name]
+                        interorf = interorfs_dict[uorf_name].seq
+                except KeyError:
+                        IOExonSizes, IOExonStarts, IOExonNormStarts = [[], [], []]
+                        interorf = ''
+                
+                IOLen = abs(true_uorf_end - CDSExonStarts[0])
+                if len(IOExonSizes) == 0:
+                        AllExons = ORFExonSizes + CDSExonSizes
+                        AllIntrons = ORFIntronSizes + [IOLen] + CDSIntronSizes
+                else:
+                        # Getting true end of the inter-ORF region
+                        if x.loc['strand'] == '+':
+                                true_io_end = IOExonStarts[-1] + IOExonSizes[-1]
+                        else:
+                                true_io_end = IOExonStarts[-1] - IOExonSizes[-1]
+                        
+                        # Getting IO-specific introns - left-most and right-most
+                        if len(IOExonSizes) > 1:
+                                IOInternalIntrons = get_intron_ln(exon_starts=IOExonNormStarts, exon_sizes=IOExonSizes)
+                        else:
+                                IOInternalIntrons = []                        
+                        left_intron_size = abs(IOExonStarts[0] - true_uorf_end)
+                        right_intron_size = abs(true_io_end - CDSExonStarts[0])
+
+                        if left_intron_size == 0:
+                                ORFExonSizes[-1] += IOExonSizes[0]
+                                del IOExonSizes[0]
+                                IOIntrons = IOInternalIntrons
+                        else:
+                                IOIntrons = [left_intron_size] + IOInternalIntrons
+                        if (right_intron_size == 0) and (len(IOExonSizes) > 0):
+                                CDSExonSizes[0] += IOExonSizes[-1]
+                                del IOExonSizes[-1]
+                        else:
+                                IOIntrons.append(right_intron_size)
+                        AllExons = ORFExonSizes + IOExonSizes + CDSExonSizes
+                        AllIntrons = ORFIntronSizes + IOIntrons + CDSIntronSizes
+                        
+                checkseq = alt_seq + str(interorf)
+                ext_checkseq = checkseq + closest_cds_row.loc['seq']
+
+                if len(checkseq)%3 > 0:
+                        ss = Seq(checkseq[0:-(len(checkseq)%3)])
+                        ess = Seq(ext_checkseq[0:-(len(ext_checkseq)%3)])
+                else:
+                        ss = Seq(checkseq)
+                        ess = Seq(ext_checkseq)
+                sstr = ss.translate()
+                esstr = ess.translate()
+
+                if '*' in sstr:
+                        main_cds_effect = 'main_CDS_unaffected'                             
+                else:
+                        if len(checkseq)%3==0:
+                                main_cds_effect = 'N-terminal_extension'
+                        else:
+                                main_cds_effect = 'out-of-frame_overlap'
+                
+                if '*' not in esstr:
+                        ExportExons = AllExons
+                        ExportExons[-1] += 3
+                        ExportIntrons = AllIntrons
+                else:
+                        where_stop = [i for i, x in enumerate(esstr) if x == '*'][0]
+                        stop_codon_start = (where_stop * 3) + signed_diff
+                        ExportExons = []
+                        ExportLength = 0
+                        ExportIntrons = []
+                        for i, k in enumerate(AllExons):
+                                if i >= 1:
+                                        ExportIntrons.append(AllIntrons[i - 1])
+                                if stop_codon_start < (ExportLength + k):
+                                        ExportExons.append(stop_codon_start - ExportLength + 2)
+                                        break
+                                ExportExons.append(k)
+                                ExportLength += k
+
+                #print(f"Of a total of {len(AllExons)} remained {len(ExportExons)} due to {conseq} in {uorf_name} on strand {x.loc['strand']} with CDS effect {main_cds_effect}")
+                
+                AllStarts = np.cumsum([0] + [x + y for x, y in zip(ExportExons[:-1], ExportIntrons)])
+                MasterLength = AllStarts[-1] + ExportExons[-1]
+
+                export_bed_line = [x.loc['#CHROM']]
+
+                if x.loc['strand'] == '+':
+                        export_bed_line.append(x.loc['orf_start'])
+                        export_bed_line.append(x.loc['orf_start'] + MasterLength)
+                        ExportStarts = AllStarts
+                else:
+                        export_bed_line.append(x.loc['orf_end'] - MasterLength)
+                        export_bed_line.append(x.loc['orf_end'])
+                        ExportStarts = list(reversed([MasterLength - x - y for x, y in zip(ExportExons, AllStarts)]))
+                        ExportExons = list(reversed(ExportExons))
+
+                export_name = f"{x.loc['#CHROM']}-{x.loc['POS']}-{x.loc['REF']}>{x.loc['ALT']}|{conseq}|{main_cds_effect}|{uorf_name}"
+                export_bed_line.append(export_name)
+                export_bed_line.append(0)
+                export_bed_line.append(x.loc['strand'])
+                export_bed_line.append(export_bed_line[1])
+                export_bed_line.append(export_bed_line[1])
+
+                # Color annotation
+                if main_cds_effect == 'N-terminal_extension':
+                        export_bed_line.append('255,125,0')
+                elif main_cds_effect == 'out-of-frame_overlap':
+                        export_bed_line.append('255,0,0')
+                elif main_cds_effect == 'main_CDS_unaffected':
+                        export_bed_line.append('125,125,125')
+                else:
+                        export_bed_line.append('0,0,0')
+                
+                export_bed_line.append(len(ExportStarts))
+                export_bed_line.append(','.join([str(x) for x in ExportExons]) + ',')
+                export_bed_line.append(','.join([str(x) for x in ExportStarts]) + ',')
+
+                export_bed_str = '\t'.join([str(x) for x in export_bed_line])
+                if x.loc['codon_type'] == 'ATG' or not atg_only:
+                        output_bed.write(f'{export_bed_str}\n')
 
         # return two columns: symbolic designation of variants and consequence group
         return pd.Series([symb, conseq, main_cds_effect], index=['symbol', 'consequence', 'main_cds_effect'])
@@ -505,12 +692,19 @@ if __name__ == '__main__':
         @click.option('--fasta', '-f', required=True)
         @click.option('--gtf', '-g')
         @click.option('--output_tsv', '-ot')
+        @click.option('--output_bed', '-ob', required=True)
         @click.option('--output_vcf', '-ov', required=True)
-        def main(input_vcf, bed, fasta, gtf, output_tsv, output_vcf) -> None:
+        @click.option('--atg_only', '-atg', is_flag=True, default=False)
+        def main(input_vcf, bed, fasta, gtf, output_tsv, output_bed, output_vcf, atg_only) -> None:
 
                 # HARDCODED: annotations from 4 column of bed file
                 bed_4col_info = '|utid|overlapping_type|codon_type'
                 bed_4col_info_cols = bed_4col_info.split('|')[1:]
+
+                if os.path.isfile(output_bed):
+                        print('WARN Output BED file exists, overwriting...')
+                out_bed_handle = open(output_bed, 'w')
+                out_bed_handle.write('track name="affected uORFs" description=" affected uORFs " itemRgb="On"\n')
 
                 # get VCF-header lines
                 tmp_h = NamedTemporaryFile()
@@ -518,7 +712,9 @@ if __name__ == '__main__':
                 with open(tmp_h.name) as f:
                         h = f.read()
                 # processing
-                df = process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h)
+                df = process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, out_bed_handle, atg_only)
+                if atg_only:
+                        df = df.loc[df['codon_type'] == 'ATG']
 
                 df.drop_duplicates(subset=['#CHROM', 'POS', 'REF', 'ALT',
                                         'orf_start', 'orf_end'], inplace=True)
@@ -575,5 +771,7 @@ if __name__ == '__main__':
                         w.write(h)
                         w.write('\n')
                         df.to_csv(w, sep='\t', index=None)
+                
+                out_bed_handle.close()
         # run analysis
         main()
