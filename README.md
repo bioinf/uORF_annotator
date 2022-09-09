@@ -25,7 +25,9 @@ python uORF_annotator.py \
     -g <input_annotation.gtf> \
     -f <human_genome.fasta> \
     -ot <output.tsv> \
-    -ov <output.vsc>
+    -ov <output.vsc> \
+    -ob <output.bed> \
+    -atg_only
 ```
 ## Output formats specification
 ### tab-separated (tsv) file
