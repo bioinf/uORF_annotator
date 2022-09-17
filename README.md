@@ -15,7 +15,7 @@ conda env create -f requirements.yml
 * BED file with available uORFs (`sorted.v3.bed` in this repository)
 * GTF file with genomic features annotation
 
-It is highly recommended to run the tool **with a GTF file containing uORF-matching transcript isoforms for each gene** (`combined_uorf.gtf` in this repository). If full GTF file is provided, effects of uORF variants on main CDS of the gene will be annotated with reference to the isoform with the closest start codon to uORF.
+It is highly recommended to run the tool **with a GTF file containing uORF-matching transcript isoforms for each gene** (`combined_uorf.gtf` in this repository). If a GTF file lacks matching transcript IDs, main CDS effect will not be properly annotated.
 ## Run example
 ```
 python uORF_annotator.py \
