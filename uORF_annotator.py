@@ -62,7 +62,11 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
 
         tmp = NamedTemporaryFile()
         tmp1 = NamedTemporaryFile()
+        tmp_exons_bed = NamedTemporaryFile()
         tmp_exons_gtf = NamedTemporaryFile()
+        tmp_exons_sorted = NamedTemporaryFile()
+        tmp_interorf_single = NamedTemporaryFile()
+        tmp_io_exon_isec_tab = NamedTemporaryFile()
         tmp_interorfs_bed = NamedTemporaryFile()
         tmp_interorfs_bed_sorted = NamedTemporaryFile()
         tmp_interorfs_full_seq = NamedTemporaryFile()
@@ -72,25 +76,120 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
         df['zero'] = 0
         df = df.astype({'orf_start':'int32', 'orf_end':'int32'})
         df['name'] = df['#CHROM'] + ':' + df['orf_start'].astype(str) + '-' + df['orf_end'].astype(str) + '(' + df['strand'] + ')'
+        df['transcript'] = [re.findall('[NMENST]+_*\d+', x)[0] for x in df['bed_anno']]
+        df['name_and_trans'] = [f'{x}/{y}' for x, y in zip(df['name'], df['transcript'])]
         df.to_csv('check_temp_df.tsv', header=None, sep='\t', index=False)
-        df.loc[:, ['#CHROM', 'orf_start', 'orf_end', 'name', 'zero', 'strand']]\
+        df.loc[:, ['#CHROM', 'orf_start', 'orf_end', 'name_and_trans', 'zero', 'strand']]\
                 .to_csv(tmp.name, header=None, sep='\t', index=False)
 
         sp.run(f'sort -k1,1 -k2,2n {tmp.name} > {tmp1.name}', shell=True)
-        sp.run(f'grep -P "\tCDS\t" {gtf} | sort -k1,1 -k4,4n -u > {tmp_exons_gtf.name}', shell=True)
+        
+        source_gtf = pd.read_csv(gtf, sep='\t', comment='#', header=None)
+        source_gtf.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
+        source_gtf['start'] = [int(x) - 1 for x in source_gtf['start']]
+        source_gtf['end'] = [int(x) for x in source_gtf['end']]
+        ok_rows = [bool(re.search('(NM_|ENST)\d+', x)) for x in source_gtf['info']]
+        source_gtf = source_gtf.loc[ok_rows]
+        source_gtf['transcript'] = [re.findall('transcript_id \"((NM_|ENST)\d+)', x)[0][0] for x in source_gtf['info']]
 
-        command = f"""rm -f {fasta}.fai && cat {gtf} | awk -F '\t' '$3~/CDS/' | awk -F '\t' '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools closest -a {tmp1.name} -b - -s -iu -io -D a -t first | tee {closest_cds_data.name} | awk -F '\t' '$6=="-" {{OFS="\t"; print$1,$9,$2,$4,"0",$6}} $6=="+" {{OFS="\t"; print$1,$3,$8,$4,"0",$6}}' | sort -k1,1 -k2,2n | bedtools intersect -a - -b {tmp_exons_gtf.name} | tee {tmp_interorfs_bed.name} | bedtools getfasta -bed - -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
-        sp.run(command, shell=True)
-        command = f"""cat {tmp_interorfs_bed.name} | sort -k1,1 -k2,2n | uniq > {tmp_interorfs_bed_sorted.name}"""
-        sp.run(command, shell=True)
-        ### uORF DATA ###
-        uorf_df = df.loc[:, ['#CHROM', 'POS', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name']]
-        uorf_df.columns = ['#CHROM', 'POS', 'orf_start', 'orf_end', 'exons_sizes', 'exons_norm_starts', 'id']
-        uorf_df['exons_starts'] = [(o + x for x in e) for o, e in zip(uorf_df['orf_start'], uorf_df['exons_norm_starts'])]
+        exons_gtf = source_gtf.loc[source_gtf['type'] == 'exon']
+        export_exons = exons_gtf.loc[:, ['chr', 'start', 'end', 'transcript', 'score', 'strand']]
+        export_exons.to_csv(tmp_exons_bed.name, sep='\t', header=False, index=False)
+        sp.run(f'sort -k1,1 -k4,4n {tmp_exons_bed.name} | uniq > {tmp_exons_sorted.name}', shell=True)
+
+        cds_gtf = source_gtf.loc[source_gtf['type'] == 'CDS']
+
+        uorf_df = df.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', \
+                        'exons_sizes', 'exons_starts', 'name', 'name_and_trans']]
+        uorf_df.columns = ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', \
+                        'exons_sizes', 'exons_norm_starts', 'id', 'name_and_trans']
+        uorf_df = uorf_df.loc[uorf_df.astype(str).drop_duplicates().index]
+        uorf_exons = []
+        uorf_norm_exons = []
+        for idx, row_data in uorf_df.iterrows():
+                out_starts = []
+                out_norm_starts = []
+                orf_len = row_data.loc['orf_end'] - row_data.loc['orf_start']
+                if row_data.loc['strand'] == '+':
+                        for eStart in row_data.loc['exons_norm_starts']:
+                                out_starts.append(row_data.loc['orf_start'] + eStart)
+                                out_norm_starts.append(eStart)
+                else:
+                        for eStart, eSize in zip(row_data.loc['exons_norm_starts'], row_data['exons_sizes']):
+                                out_starts.append(row_data.loc['orf_start'] + eStart + eSize)
+                                out_norm_starts.append(orf_len - eStart - eSize)
+                        out_starts = list(reversed(out_starts))
+                        out_norm_starts = list(reversed(out_norm_starts))
+                uorf_exons.append(list(out_starts))
+                uorf_norm_exons.append(list(out_norm_starts))
+        uorf_df['exons_starts'] = uorf_exons
+        uorf_df['exons_norm_starts'] = uorf_norm_exons
+        uorf_esizes = []
+        for idx, row_data in uorf_df.iterrows():
+                if row_data['strand'] == '+':
+                        uorf_esizes.append(list(row_data['exons_sizes']))
+                else:
+                        uorf_esizes.append(list(reversed(row_data['exons_sizes'])))
+        uorf_df['exons_sizes'] = uorf_esizes
+
+        #uorf_df['exons_starts'] = [(o + x for x in e) for o, e in zip(uorf_df['orf_start'], uorf_df['exons_norm_starts'])]
         uorf_df.index = uorf_df['id']
-        #print(' ======= uORF DATA ======= ')
+        #print(uorf_df.loc['chr11:31806911-31810840(-)'])
+
+        first_cds = {}
+        for idx, row_data in cds_gtf.iterrows():
+                if row_data['transcript'] not in first_cds:
+                        first_cds[row_data['transcript']] = row_data
+                        continue
+                if (row_data['strand'] == '-') and (first_cds[row_data['transcript']]['start'] < row_data['start']):
+                     first_cds[row_data['transcript']] = row_data
+        first_cds_df = pd.DataFrame(first_cds).T
+        #print(first_cds_df)
+        first_cds_df.index = first_cds_df['transcript']
+
+        def get_true_cds_start(tr_id, first_cds_df=first_cds_df):
+                if tr_id not in first_cds_df.index:
+                        return None
+                gtf_row = first_cds_df.loc[tr_id]
+                if gtf_row['strand'] == '+':
+                        return gtf_row['start']
+                return gtf_row['end']
+
+        uorf_df['cds_start'] = [get_true_cds_start(x) for x in uorf_df['transcript']]
         #print(uorf_df)
-        #################
+
+        interorf_data = []
+        for idx, row_data in uorf_df.iterrows():
+                if (row_data['strand'] == '+') and (row_data['orf_end'] < row_data['cds_start']):
+                        interorf_data.append(row_data[['#CHROM', 'orf_end', 'cds_start', 'name_and_trans']].values)
+                elif row_data['cds_start'] < row_data['orf_start']:
+                        interorf_data.append(row_data[['#CHROM', 'cds_start', 'orf_start', 'name_and_trans']].values)
+        interorf_single = pd.DataFrame(interorf_data)
+        interorf_single = interorf_single.dropna()
+        interorf_single.columns = ['chr', 'start', 'end', 'name_and_trans']
+        interorf_single['start'] = [int(x) for x in interorf_single['start']]
+        interorf_single['end'] = [int(x) for x in interorf_single['end']]
+        interorf_single.to_csv(tmp_interorf_single.name, sep='\t', header=False, index=False)
+        
+        cmd = f"""bedtools intersect -wo -a {tmp_interorf_single.name} -b {tmp_exons_sorted.name} | tee test_isec.bed > {tmp_io_exon_isec_tab.name}"""
+        sp.run(cmd, shell=True)
+
+        with open(tmp_io_exon_isec_tab.name, 'r') as isec_handle, open(tmp_interorfs_bed.name, 'w') as isec_out:
+                for line in isec_handle:
+                        content = line.strip().split('\t')
+                        uorf_tr_id = content[3].split('/')[1]
+                        if uorf_tr_id == content[7]:
+                                rstart = max(int(content[1]), int(content[5]))
+                                rend = min(int(content[2]), int(content[6]))
+                                out_line = f'{content[0]}\t{rstart}\t{rend}\t{content[3]}\t{content[8]}\t{content[9]}\n'
+                                isec_out.write(out_line)
+        
+        command = f"""cat {tmp_interorfs_bed.name} | sort -k1,1 -k2,2n | uniq | tee test_io_exons.bed > {tmp_interorfs_bed_sorted.name}"""
+        sp.run(command, shell=True)
+
+        command = f"""rm -f {fasta}.fai && bedtools getfasta -bed {tmp_interorfs_bed_sorted.name} -fi {fasta} -s -name > {tmp_interorfs_fasta.name}""" #| sed 's/::.*//g' > {tmp_interorfs_fasta.name}"""
+        sp.run(command, shell=True)
+        
 
         ### INTERORF DATA ###
         interorfs_bed_list = [line.rstrip().split('\t') for line in open(tmp_interorfs_bed_sorted.name).read().split('\n') if line != '' ]
@@ -111,24 +210,60 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
                         contig = interorfs_bed_dict[k]['chr']
                         interorfs_bed_dict[k]['exons_norm_starts'] = [i-starts_sorted[0] for i in starts_sorted]
                 elif interorfs_bed_dict[k]['strand'] == '-':
+                        size_dict = {k: v for k, v in zip(interorfs_bed_dict[k]['exons_starts'], interorfs_bed_dict[k]['exons_sizes'])}
                         starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'], reverse=True)
-                        interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, reversed(interorfs_bed_dict[k]['exons_sizes'])))]
+                        interorfs_bed_dict[k]['exons_sizes'] = [size_dict[x] for x in starts_sorted]
                         contig = interorfs_bed_dict[k]['chr']
                         interorfs_bed_dict[k]['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+                        interorfs_bed_dict[k]['exons_starts'] = starts_sorted
         interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
         # interorfs_bed_df.columns = ['contig', 'start', 'end']
         interorfs_bed_df['id'] = interorfs_bed_df.index
         #print(' ======= interORF DATA ======= ')
         #print(interorfs_bed_df)
+        #print(interorfs_bed_df.loc['chr11:31810829-31811221(-)/NM_001604'])
         #####################
 
+        seen_parts = set()
+        records = []
+
+        ############ BIG CHUNK OF NEW CODE ####################################
+
+        interorfs_full_seq = defaultdict(str)
+
+        with open(tmp_interorfs_fasta.name, "r") as split_fasta, open(tmp_interorfs_full_seq.name, 'w') as full_fasta:
+            for line in split_fasta:
+                if line.startswith('>'):
+                    record_tmp_name = line[1:]
+                    uorf_tmp_name = record_tmp_name.split('::')[0]
+                    if record_tmp_name in seen_parts:
+                        skip = True
+                    else:
+                        seen_parts.add(record_tmp_name)
+                        skip = False
+                else:
+                    if skip:
+                        continue
+                    if '(-)' in uorf_tmp_name:
+                        interorfs_full_seq[uorf_tmp_name] = line.strip() + interorfs_full_seq[uorf_tmp_name]
+                    else:
+                        interorfs_full_seq[uorf_tmp_name] = interorfs_full_seq[uorf_tmp_name] + line.strip()
+            for interorf_seq in interorfs_full_seq:
+                full_fasta.write(f">{interorf_seq}\n{interorfs_full_seq[interorf_seq]}\n")
+
+        ############# END OF CHUNK ############################################
+
+
+        cmd = f'grep -P "\tCDS\t" {gtf} | sort -k1,1 -k4,4n | uniq - > {tmp_exons_gtf.name}'
+        sp.run(cmd, shell=True)
+
         # make per transcript exon dict (CDS-data)
-        exons_gtf_list = [line.rstrip().split('\t') for line in open(tmp_exons_gtf.name).read().split('\n') if line != '']
+        exons_gtf_list = [line.rstrip().split('\t') for line in open(tmp_exons_gtf.name).read().split('\n') if line.startswith('chr')]
         exons_gtf_dict = defaultdict(lambda: defaultdict(list))
         idx = [False for _ in exons_gtf_list[0]]
         idx[0], idx[3], idx[4], idx[6] = True, True, True, True
         for gtf_line in exons_gtf_list:
-                key = re.search("transcript_id ([^;]+)", gtf_line[8]).group(1).strip('"')
+                key = re.search('transcript_id \"([^\.]+)', gtf_line[8]).group(1).strip('"')
                 values = [gtf_line_sub for i, gtf_line_sub in zip(idx, gtf_line) if i]
                 exons_gtf_dict[key]['chr'] = values[0]
                 exons_gtf_dict[key]['strand'] = values[-1]
@@ -155,7 +290,7 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
 
         ### Get sequences of CDS
         cds_fasta = NamedTemporaryFile()
-        get_cds_command = f"""rm -f {fasta}.fai && cat {gtf} | awk -F '\t' '$3~/CDS/' | awk -F '\t' '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n -u | bedtools getfasta -bed - -fi {fasta} -s > {cds_fasta.name}"""
+        get_cds_command = f"""rm -f {fasta}.fai && cat {gtf} | awk -F '\t' '$3~/CDS/' | awk -F '\t' '{{OFS="\t";print$1,$4-1,$5,$3,0,$7}}' | sort -k1,1 -k2,2n | uniq | bedtools getfasta -bed - -fi {fasta} -s > {cds_fasta.name}"""
         sp.run(get_cds_command, shell=True)
         cds_seqs = []
         for record in SeqIO.parse(cds_fasta.name, "fasta"):  
@@ -192,40 +327,12 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
                         closest_cds_dict[content[3]] = f"{content[0]}:{exStart}({content[5]})"
 
         exons_gtf_df = pd.DataFrame(exons_gtf_dict).T
-        exons_gtf_df.index = exons_gtf_df['id']
+        #exons_gtf_df.index = exons_gtf_df['id']
         #print(' ======= CDS DATA ======= ')
         #print(exons_gtf_df)
         exons_gtf_df.to_csv('look_at_me.tsv', sep='\t', index=False)
         ################
 
-        seen_parts = set()
-        records = []
-
-        ############ BIG CHUNK OF NEW CODE ####################################
-
-        interorfs_full_seq = defaultdict(str)
-
-        with open(tmp_interorfs_fasta.name, "r") as split_fasta, open(tmp_interorfs_full_seq.name, 'w') as full_fasta:
-            for line in split_fasta:
-                if line.startswith('>'):
-                    record_tmp_name = line[1:]
-                    uorf_tmp_name = record_tmp_name.split('::')[0]
-                    if record_tmp_name in seen_parts:
-                        skip = True
-                    else:
-                        seen_parts.add(record_tmp_name)
-                        skip = False
-                else:
-                    if skip:
-                        continue
-                    if '(-)' in uorf_tmp_name:
-                        interorfs_full_seq[uorf_tmp_name] = line.strip() + interorfs_full_seq[uorf_tmp_name]
-                    else:
-                        interorfs_full_seq[uorf_tmp_name] = interorfs_full_seq[uorf_tmp_name] + line.strip()
-            for interorf_seq in interorfs_full_seq:
-                full_fasta.write(f">{interorf_seq}\n{interorfs_full_seq[interorf_seq]}\n")
-
-        ############# END OF CHUNK ############################################
                 
 
         for record in SeqIO.parse(tmp_interorfs_full_seq.name, "fasta"):  
@@ -531,14 +638,14 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 uorf_name = f"{x['#CHROM']}:{int(x.loc['orf_start'])}-{int(x.loc['orf_end'])}({x.loc['strand']})"
                 uorf_len = int(x.loc['orf_end']) - int(x.loc['orf_start'])
 
-                uorf_df_row = uorf_df.drop_duplicates(subset='id', keep='last').loc[uorf_name]
-                ORFExonSizes = uorf_df_row['exons_sizes']
-                ORFExonStarts = uorf_df_row['exons_starts']
-                ORFExonNormStarts = uorf_df_row['exons_norm_starts']
+                uorf_df_row = uorf_df.drop_duplicates(subset='id', keep='last').loc[uorf_name].copy()
+                ORFExonSizes = uorf_df_row['exons_sizes'].copy()
+                ORFExonStarts = uorf_df_row['exons_starts'].copy()
+                ORFExonNormStarts = uorf_df_row['exons_norm_starts'].copy()
 
                 if x['strand'] == '-':
-                        ORFExonNormStarts = list(reversed([uorf_len - x - y for x, y in zip(ORFExonSizes, ORFExonNormStarts)]))
-                        ORFExonSizes = list(reversed(ORFExonSizes))
+                        #ORFExonNormStarts = list(reversed([uorf_len - x - y for x, y in zip(ORFExonSizes, ORFExonNormStarts)]))
+                        #ORFExonSizes = list(reversed(ORFExonSizes))
                         true_uorf_start = x.loc['orf_end']
                         true_uorf_end = x.loc['orf_start']
                 else:
@@ -547,12 +654,12 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
 
                 ORFIntronSizes = get_intron_ln(exon_starts=ORFExonNormStarts, exon_sizes=ORFExonSizes)
                 
-                transcript_id = closest_cds_dict[uorf_name]
+                transcript_id = uorf_df.loc[uorf_name]['transcript']
                 try:
-                        closest_cds_row = cds_df.loc[transcript_id]
-                        CDSExonSizes = closest_cds_row.loc['exons_sizes']
-                        CDSExonStarts = closest_cds_row.loc['exons_starts']
-                        CDSExonNormStarts = closest_cds_row.loc['exons_norm_starts']
+                        closest_cds_row = cds_df.loc[transcript_id].copy()
+                        CDSExonSizes = closest_cds_row.loc['exons_sizes'].copy()
+                        CDSExonStarts = closest_cds_row.loc['exons_starts'].copy()
+                        CDSExonNormStarts = closest_cds_row.loc['exons_norm_starts'].copy()
                         CDSIntronSizes = get_intron_ln(exon_starts=CDSExonNormStarts, exon_sizes=CDSExonSizes)
                 except KeyError:
                         if x.loc['overlapping_type'] == 'non-overlapping':
@@ -560,8 +667,9 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         return pd.Series([symb, conseq, 'unassigned'], index=['symbol', 'consequence', 'main_cds_effect'])
 
                 try:
-                        _, _, IOExonSizes, IOExonStarts, IOExonNormStarts, _ = interorfs_bed_df.loc[uorf_name]
-                        interorf = interorfs_dict[uorf_name].seq
+                        io_name = x.loc["name_and_trans"]
+                        _, _, IOExonSizes, IOExonStarts, IOExonNormStarts, _ = interorfs_bed_df.loc[io_name].copy()
+                        interorf = interorfs_dict[io_name].seq
                 except KeyError:
                         IOExonSizes, IOExonStarts, IOExonNormStarts = [[], [], []]
                         interorf = ''
@@ -585,15 +693,34 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         left_intron_size = abs(IOExonStarts[0] - true_uorf_end)
                         right_intron_size = abs(true_io_end - CDSExonStarts[0])
 
+                        #if io_name == 'chr11:31806911-31810840(-)/NM_000280':
+                        #        print(uorf_name)
+                        #        print(uorf_df.loc[uorf_name])
+                        #        print(list(ORFExonStarts))
+                        #        print(ORFExonNormStarts)
+                        #        print(ORFExonSizes)
+                        #        print(IOExonStarts)
+                        #        print(IOExonNormStarts)
+                        #        print(IOExonSizes)
+                        #        print(CDSExonStarts)
+                        #        print(CDSExonNormStarts)
+                        #        print(IOInternalIntrons)
+                        #        print('## #INTRONS')
+                        #        print(ORFIntronSizes)
+                        #        print(left_intron_size)
+                        #        print(IOInternalIntrons)
+                        #        print(right_intron_size)
+                        #        print(CDSIntronSizes)
+
                         if left_intron_size == 0:
                                 ORFExonSizes[-1] += IOExonSizes[0]
-                                del IOExonSizes[0]
+                                IOExonSizes = [x for idx, x in enumerate(IOExonSizes) if idx != 0]
                                 IOIntrons = IOInternalIntrons
                         else:
                                 IOIntrons = [left_intron_size] + IOInternalIntrons
                         if (right_intron_size == 0) and (len(IOExonSizes) > 0):
                                 CDSExonSizes[0] += IOExonSizes[-1]
-                                del IOExonSizes[-1]
+                                IOExonSizes = [x for idx, x in enumerate(IOExonSizes) if idx != (len(IOExonSizes) - 1)]
                         else:
                                 IOIntrons.append(right_intron_size)
                         AllExons = ORFExonSizes + IOExonSizes + CDSExonSizes
@@ -677,6 +804,8 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 export_bed_line.append(','.join([str(x) for x in ExportStarts]) + ',')
 
                 export_bed_str = '\t'.join([str(x) for x in export_bed_line])
+                #if io_name == 'chr11:31806911-31810840(-)/NM_000280':
+                #                 print(export_bed_str)
                 if x.loc['codon_type'] == 'ATG' or not atg_only:
                         output_bed.write(f'{export_bed_str}\n')
 
