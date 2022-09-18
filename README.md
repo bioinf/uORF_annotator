@@ -1,9 +1,8 @@
-# uORF Annotator v. 0.4
+# uORF Annotator v. 0.5
 *uORF Annotator* is the tool for annotation of upstream translation initiation sites in upstream open reading frames (uORFs) of human genome, which predicted by [uBert model](https://github.com/skoblov-lab/uBERTa).
 
-New in v. 0.4:
-* all effects are now annotated with respect to the uORF-specific isoform
-* major issues in BED generation and main CDS effect annotation fixed
+New in v. 0.5:
+* annotation of main CDS effect for overlapping uORFs
 
 ## Conda environment
 Install all dependencies from `requirements.yml` as new conda environment.

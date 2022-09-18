@@ -661,6 +661,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         CDSExonStarts = closest_cds_row.loc['exons_starts'].copy()
                         CDSExonNormStarts = closest_cds_row.loc['exons_norm_starts'].copy()
                         CDSIntronSizes = get_intron_ln(exon_starts=CDSExonNormStarts, exon_sizes=CDSExonSizes)
+                        CDSSeq = closest_cds_row.loc['seq']
                 except KeyError:
                         if x.loc['overlapping_type'] == 'non-overlapping':
                                 print(f'WARN Closest CDS is not the first one for non-overlappiong uORF {uorf_name}!')
@@ -674,11 +675,44 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         IOExonSizes, IOExonStarts, IOExonNormStarts = [[], [], []]
                         interorf = ''
                 
-                IOLen = abs(true_uorf_end - CDSExonStarts[0])
-                if len(IOExonSizes) == 0:
+                if x.loc['strand'] == '+':
+                        IOLen = CDSExonStarts[0] - true_uorf_end
+                else:
+                        IOLen = true_uorf_end - CDSExonStarts[0]
+                if IOLen <= 0:
+                        remaining_exons = CDSExonSizes.copy()
+                        remaining_introns = CDSIntronSizes.copy()
+                        for eID, eStart in enumerate(CDSExonStarts):
+                                eSize = CDSExonSizes[eID]
+                                if x.loc['strand'] == '+':
+                                        eEnd = eStart + eSize
+                                        pos_cond = (eEnd < true_uorf_end)
+                                else:
+                                        eEnd = eStart - eSize
+                                        pos_cond = (eEnd >= true_uorf_end)
+                                if pos_cond:
+                                        remaining_exons = remaining_exons[1:]
+                                        remaining_introns = remaining_introns[1:]
+                                        CDSSeq = CDSSeq[eSize:]
+                                else:
+                                        extension = abs(eEnd - true_uorf_end)
+                                        remove_piece = (remaining_exons[0] - extension)
+                                        ORFExonSizes[-1] += extension 
+                                        CDSExonSizes = remaining_exons[1:]
+                                        CDSIntronSizes = remaining_introns
+                                        CDSSeq = CDSSeq[remove_piece:]
+                                        #if len(remaining_introns) > 1:
+                                        #        CDSIntronSizes = remaining_introns[1:]
+                                        #else:
+                                        #        CDSIntronSizes = []
+                                        break
+                        AllExons = ORFExonSizes + CDSExonSizes
+                        AllIntrons = ORFIntronSizes + CDSIntronSizes
+
+                if (len(IOExonSizes) == 0) and (IOLen > 0):
                         AllExons = ORFExonSizes + CDSExonSizes
                         AllIntrons = ORFIntronSizes + [IOLen] + CDSIntronSizes
-                else:
+                elif IOLen > 0:
                         # Getting true end of the inter-ORF region
                         if x.loc['strand'] == '+':
                                 true_io_end = IOExonStarts[-1] + IOExonSizes[-1]
@@ -727,21 +761,33 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         AllIntrons = ORFIntronSizes + IOIntrons + CDSIntronSizes
                         
                 checkseq = alt_seq + str(interorf)
-                ext_checkseq = checkseq + closest_cds_row.loc['seq']
+                ext_checkseq = checkseq + CDSSeq
 
                 if len(checkseq)%3 > 0:
                         ss = Seq(checkseq[0:-(len(checkseq)%3)])
-                        ess = Seq(ext_checkseq[0:-(len(ext_checkseq)%3)])
                 else:
                         ss = Seq(checkseq)
+
+                if len(ext_checkseq)%3 > 0:
+                        ess = Seq(ext_checkseq[0:-(len(ext_checkseq)%3)])
+                else:
                         ess = Seq(ext_checkseq)
+
                 sstr = ss.translate()
                 esstr = ess.translate()
 
                 if '*' in sstr:
                         main_cds_effect = 'main_CDS_unaffected'                             
                 else:
-                        if len(checkseq)%3==0:
+                        #if len(checkseq)%3==0:
+                        #print(checkseq)
+                        #print(ss)
+                        #print(sstr)
+                        #print(ext_checkseq)
+                        #print(ess)
+                        #print(esstr)
+                        #print(-(len(ext_checkseq)%3))
+                        if (len(ext_checkseq)%3 == 0) and not ('*' in esstr[:-1]):
                                 main_cds_effect = 'N-terminal_extension'
                         else:
                                 main_cds_effect = 'out-of-frame_overlap'
