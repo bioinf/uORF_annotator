@@ -1,5 +1,5 @@
 # uORF Annotator v. 0.5
-*uORF Annotator* is the tool for annotation of upstream translation initiation sites in upstream open reading frames (uORFs) of human genome, which predicted by [uBert model](https://github.com/skoblov-lab/uBERTa).
+*uORF Annotator* is the tool for annotation of the functional impact of genetic variants in upstream open reading frames (uORFs) in the human genome, which are predicted by [uBert model](https://github.com/skoblov-lab/uBERTa).
 
 New in v. 0.5:
 * annotation of main CDS effect for overlapping uORFs
