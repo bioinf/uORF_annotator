@@ -680,6 +680,8 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 else:
                         IOLen = true_uorf_end - CDSExonStarts[0]
                 if IOLen <= 0:
+                        if x.loc['overlapping_type'] == 'non-overlapping':
+                                print('WARN Saw the end of non-overlapping uORF inside CDS')
                         remaining_exons = CDSExonSizes.copy()
                         remaining_introns = CDSIntronSizes.copy()
                         for eID, eStart in enumerate(CDSExonStarts):
