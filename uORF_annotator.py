@@ -23,6 +23,19 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
         tmp_out = NamedTemporaryFile()
         sp.run(f'bedtools intersect -wo -a {tmp_vcf1.name} -b {bed} > {tmp_out.name}', shell=True)
 
+        source_bed_lines = {}
+        orf_count = 1
+        with open(bed, 'r') as in_bed_handle:
+                for line in in_bed_handle:
+                        if line.startswith('#'):
+                                continue
+                        content = line.strip().split('\t')
+                        trans_id = re.findall('[NMENST]+_*\d+', content[3])[0]
+                        uo_name = f"{content[0]}:{content[1]}-{content[2]}({content[5]})/{trans_id}"
+                        content[3] = f"UORF{orf_count}|{content[3]}"
+                        orf_count += 1
+                        source_bed_lines[uo_name] = content.copy()
+
         # preprocessing
         df = pd.read_table(tmp_out.name, header=None)
         df = df.dropna()
@@ -348,7 +361,9 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, h, output_bed, atg_o
                                                                                         uorf_df=uorf_df, \
                                                                                         cds_df=exons_gtf_df, \
                                                                                         closest_cds_dict=closest_cds_dict, \
-                                                                                        output_bed=output_bed, atg_only=atg_only),
+                                                                                        output_bed=output_bed, \
+                                                                                        source_bed_lines=source_bed_lines, \
+                                                                                        atg_only=atg_only),
                                                                                         axis=1)
 
         # check overlapping with gtf annotation of CDS
@@ -435,7 +450,7 @@ def check_overlapping(df, gtf, h, fasta, bed_4col_info_cols) -> pd.core.frame.Da
         return df
 
 
-def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cds_df, closest_cds_dict, output_bed, atg_only) -> pd.core.series.Series:
+def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cds_df, closest_cds_dict, output_bed, source_bed_lines, atg_only) -> pd.core.series.Series:
         """get a symbolic description of the mutations and consequences"""
 
         main_cds_effect = ''
@@ -667,8 +682,10 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                                 print(f'WARN Closest CDS is not the first one for non-overlappiong uORF {uorf_name}!')
                         return pd.Series([symb, conseq, 'unassigned'], index=['symbol', 'consequence', 'main_cds_effect'])
 
+                io_name = x.loc["name_and_trans"]
+                source_line = source_bed_lines[io_name]
+                true_orf_id = source_line[3]
                 try:
-                        io_name = x.loc["name_and_trans"]
                         _, _, IOExonSizes, IOExonStarts, IOExonNormStarts, _ = interorfs_bed_df.loc[io_name].copy()
                         interorf = interorfs_dict[io_name].seq
                 except KeyError:
@@ -830,7 +847,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         ExportStarts = list(reversed([MasterLength - x - y for x, y in zip(ExportExons, AllStarts)]))
                         ExportExons = list(reversed(ExportExons))
 
-                export_name = f"{x.loc['#CHROM']}-{x.loc['POS']}-{x.loc['REF']}>{x.loc['ALT']}|{conseq}|{main_cds_effect}|{uorf_name}"
+                export_name = f"{true_orf_id}|{x.loc['#CHROM']}-{x.loc['POS']}-{x.loc['REF']}>{x.loc['ALT']}|{conseq}|{main_cds_effect}"
                 export_bed_line.append(export_name)
                 export_bed_line.append(0)
                 export_bed_line.append(x.loc['strand'])
@@ -855,6 +872,8 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 #if io_name == 'chr11:31806911-31810840(-)/NM_000280':
                 #                 print(export_bed_str)
                 if x.loc['codon_type'] == 'ATG' or not atg_only:
+                        source_line = "\t".join(source_line)
+                        output_bed.write(f'{source_line}\n')
                         output_bed.write(f'{export_bed_str}\n')
 
         # return two columns: symbolic designation of variants and consequence group
@@ -878,9 +897,10 @@ if __name__ == '__main__':
                 bed_4col_info = '|utid|overlapping_type|codon_type'
                 bed_4col_info_cols = bed_4col_info.split('|')[1:]
 
+                tmp_out_bed = NamedTemporaryFile()
                 if os.path.isfile(output_bed):
                         print('WARN Output BED file exists, overwriting...')
-                out_bed_handle = open(output_bed, 'w')
+                out_bed_handle = open(tmp_out_bed.name, 'w')
                 out_bed_handle.write('track name="affected uORFs" description=" affected uORFs " itemRgb="On"\n')
 
                 # get VCF-header lines
@@ -950,5 +970,6 @@ if __name__ == '__main__':
                         df.to_csv(w, sep='\t', index=None)
                 
                 out_bed_handle.close()
+                sp.run(f'sort -k1,1 -k2,2n -k3,3n {tmp_out_bed.name} | uniq - > {output_bed}', shell=True)
         # run analysis
         main()
