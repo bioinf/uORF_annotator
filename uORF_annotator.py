@@ -949,11 +949,14 @@ if __name__ == '__main__':
                         h, atg_bed_handle, non_atg_bed_handle, utr_only)
                 df.drop_duplicates(subset=['#CHROM', 'POS', 'REF', 'ALT',
                                         'orf_start', 'orf_end'], inplace=True)
+
                 if utr_only:
                         df = df.loc[df['in_known_CDS'] == 'NO']
 
                 df_atg = df.loc[df['codon_type'] == 'ATG']
+                df_atg = df_atg.drop(['zero', 'name_and_trans', 'symbol'], axis=1)
                 df_non_atg = df.loc[df['codon_type'] == 'non-ATG']
+                df_non_atg = df_non_atg.drop(['zero', 'name_and_trans', 'symbol'], axis=1)
                 # write optional output tsv file
                 df_atg.to_csv(f'{output}.atg.tsv', sep='\t', index=None)
                 df_non_atg.to_csv(f'{output}.non-atg.tsv', sep='\t', index=None)
