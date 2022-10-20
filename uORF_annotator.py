@@ -32,7 +32,7 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, gene_dict, h, atg_be
                         content = line.strip().split('\t')
                         trans_id = re.findall('[NMENST]+_*\d+', content[3])[0]
                         uo_name = f"{content[0]}:{content[1]}-{content[2]}({content[5]})/{trans_id}"
-                        _, overlap_type, codon_type = content[3].split('|')
+                        _, overlap_type, _, codon_type = content[3].split('|')
                         content[3] = f"UORF{orf_count}|{overlap_type}|{codon_type}"
                         orf_count += 1
                         source_bed_lines[uo_name] = content.copy()
@@ -357,6 +357,7 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, gene_dict, h, atg_be
         interorfs_dict = SeqIO.to_dict(records)
 
         # annotate variants
+        
         df[['symbol', 'consequence', 'main_cds_effect']] = df.apply(lambda x: annotate_variant(x, \
                                                                                         uorf_dict=uorf_dict, \
                                                                                         interorfs_dict=interorfs_dict, \
@@ -612,6 +613,13 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 elif (ref_aa != alt_aa) & (alt_aa == '*'):
                         symb = f'{ref_aa}{aa_pos}*'
                         conseq = 'stop_gained'
+                        x['dist_from_orf_to_snp'] = int(x['dist_from_orf_to_snp'])
+                        if x['strand'] == "+":
+                                alt_seq = str(cds[:x['dist_from_orf_to_snp']] + Seq(x['ALT']) + cds[x['dist_from_orf_to_snp'] + 1:])
+                        elif x['strand'] == '-':
+                                alt_seq = str(cds[:x['dist_from_orf_to_snp']] + Seq(x['ALT']).reverse_complement() + cds[x['dist_from_orf_to_snp'] + 1:])
+
+                        alt_seq = Seq(alt_seq)
                 elif (ref_codon in [Seq('ATG'), Seq('CTG')]) & (alt_codon not in [Seq('ATG'), Seq('CTG')]):
                         symb = f'{ref_aa}{aa_pos}{alt_aa}'
                         conseq = 'start_lost'
@@ -646,7 +654,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                                 elif x['strand'] == '-':
                                         alt_seq = str(cds[:x['dist_from_orf_to_snp'] - diff] + Seq(x['ALT']).reverse_complement() + cds[x['dist_from_orf_to_snp'] + 1:])
 
-        if (conseq == 'stop_lost') | (conseq == 'frameshift'):
+        if (conseq == 'stop_lost') | (conseq == 'frameshift') | (conseq == 'stop_gained'):
 
                 def get_intron_ln(exon_starts, exon_sizes):
                         if len(exon_sizes) == 1:
@@ -682,8 +690,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         CDSIntronSizes = get_intron_ln(exon_starts=CDSExonNormStarts, exon_sizes=CDSExonSizes)
                         CDSSeq = closest_cds_row.loc['seq']
                 except KeyError:
-                        if x.loc['overlapping_type'] == 'non-overlapping':
-                                print(f'WARN Closest CDS is not the first one for non-overlappiong uORF {uorf_name}!')
+                        print(f'WARN Did not find transcript CDS for uORF {uorf_name}!')
                         return pd.Series([symb, conseq, 'unassigned'], index=['symbol', 'consequence', 'main_cds_effect'])
 
                 io_name = x.loc["name_and_trans"]
@@ -803,8 +810,13 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 esstr = ess.translate()
 
                 if '*' in sstr:
-                        main_cds_effect = 'main_CDS_unaffected'
-                        mce_short = 'unaff'                             
+                        dist_var_cds = int(f'{x["strand"]}1') * (CDSExonStarts[0] - x['POS']) 
+                        if dist_var_cds < 0 and conseq == 'stop_gained':
+                                main_cds_effect = 'overlap_removal'
+                                mce_short = 'activ'
+                        else:
+                                main_cds_effect = 'main_CDS_unaffected'
+                                mce_short = 'unaff'                             
                 else:
                         #if len(checkseq)%3==0:
                         #print(checkseq)
@@ -831,14 +843,18 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         ExportExons = []
                         ExportLength = 0
                         ExportIntrons = []
-                        for i, k in enumerate(AllExons):
-                                if i >= 1:
-                                        ExportIntrons.append(AllIntrons[i - 1])
-                                if stop_codon_start < (ExportLength + k):
-                                        ExportExons.append(stop_codon_start - ExportLength + 2)
-                                        break
-                                ExportExons.append(k)
-                                ExportLength += k
+                        try:
+                                for i, k in enumerate(AllExons):
+                                        if i >= 1:
+                                                ExportIntrons.append(AllIntrons[i - 1])
+                                        if stop_codon_start < (ExportLength + k):
+                                                ExportExons.append(stop_codon_start - ExportLength + 2)
+                                                break
+                                        ExportExons.append(k)
+                                        ExportLength += k
+                        except:
+                                print(f'WARN Number of introns does not match the number of exons for {uorf_name}!!')
+                                return pd.Series([symb, conseq, 'unassigned'], index=['symbol', 'consequence', 'main_cds_effect'])
 
                 #print(f"Of a total of {len(AllExons)} remained {len(ExportExons)} due to {conseq} in {uorf_name} on strand {x.loc['strand']} with CDS effect {main_cds_effect}")
                 
@@ -857,7 +873,8 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                         ExportStarts = list(reversed([MasterLength - x - y for x, y in zip(ExportExons, AllStarts)]))
                         ExportExons = list(reversed(ExportExons))
 
-                conseq_short = 'fs' if conseq == 'frameshift' else 'stop_lost'
+                conseqs_short = {'frameshift': 'fs', 'stop_lost': 'stop_lost', 'stop_gained': 'nonsn'}
+                conseq_short = conseqs_short[conseq]
 
                 export_name = f"{true_orf_id}|{x.loc['#CHROM']}-{x.loc['POS']}-{x.loc['REF']}>{x.loc['ALT']}|{conseq_short}|{mce_short}"
                 export_bed_line.append(export_name)
@@ -867,7 +884,7 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 export_bed_line.append(export_bed_line[1])
 
                 # Color annotation
-                if main_cds_effect == 'N-terminal_extension':
+                if (main_cds_effect == 'N-terminal_extension') or (main_cds_effect == 'overlap_removal'):
                         export_bed_line.append('255,125,0')
                 elif main_cds_effect == 'out-of-frame_overlap':
                         export_bed_line.append('255,0,0')
@@ -885,9 +902,9 @@ def annotate_variant(x, uorf_dict, interorfs_dict, interorfs_bed_df, uorf_df, cd
                 #                 print(export_bed_str)
                 source_line = "\t".join(source_line)
                 if x.loc['strand'] == '+':
-                        isUTR = x.loc['POS'] >= CDSExonStarts[0]
-                else:
                         isUTR = x.loc['POS'] < CDSExonStarts[0]
+                else:
+                        isUTR = x.loc['POS'] >= CDSExonStarts[0]
                 if isUTR and utr_only:
                         if x.loc['codon_type'] == 'ATG':
                                 atg_bed.write(f'{source_line}\n')
@@ -906,15 +923,16 @@ if __name__ == '__main__':
         @click.option('--input_vcf', '-i', required=True)
         @click.option('--bed', '-b', required=True)
         @click.option('--fasta', '-f', required=True)
-        @click.option('--gtf', '-g')
+        @click.option('--gtf', '-g', required=True)
+        @click.option('--gnomad_constraint', '-gc')
         @click.option('--output', '-out', required=True)
 #        @click.option('--output_bed', '-ob', required=True)
 #        @click.option('--output_vcf', '-ov', required=True)
         @click.option('--utr_only', '-utr', is_flag=True, default=False)
-        def main(input_vcf, bed, fasta, gtf, output, utr_only) -> None:
+        def main(input_vcf, bed, fasta, gtf, output, utr_only, gnomad_constraint) -> None:
 
                 # HARDCODED: annotations from 4 column of bed file
-                bed_4col_info = '|utid|overlapping_type|codon_type'
+                bed_4col_info = '|utid|overlapping_type|dominance_type|codon_type'
                 bed_4col_info_cols = bed_4col_info.split('|')[1:]
 
                 gene_transcript = defaultdict(str)
@@ -935,9 +953,11 @@ if __name__ == '__main__':
                 if os.path.isfile(non_atg_bed):
                         print('WARN Output non-ATG BED file exists, overwriting...')
                 atg_bed_handle = open(tmp_atg_bed.name, 'w')
-                atg_bed_handle.write('track name="affected ARG uORFs" description=" affected uORFs " itemRgb="On"\n')
+                with open(atg_bed, 'w') as out_atg_handle:
+                        out_atg_handle.write('#track name="affected ARG uORFs" description=" affected uORFs " itemRgb="On"\n')
                 non_atg_bed_handle = open(tmp_non_atg_bed.name, 'w')
-                non_atg_bed_handle.write('track name="affected non-ATG uORFs" description=" affected uORFs " itemRgb="On"\n')
+                with open(non_atg_bed, 'w') as out_non_atg_handle:
+                        out_non_atg_handle.write('#track name="affected non-ATG uORFs" description=" affected uORFs " itemRgb="On"\n')
 
                 # get VCF-header lines
                 tmp_h = NamedTemporaryFile()
@@ -952,11 +972,23 @@ if __name__ == '__main__':
 
                 if utr_only:
                         df = df.loc[df['in_known_CDS'] == 'NO']
+                
+                export_columns = ["#CHROM", "POS", "REF", "ALT", "orf_start", "orf_end", "strand", "gene_name", \
+                                "transcript", "codon_type", "overlapping_type", "dist_from_orf_to_snp", \
+                                "consequence", "main_cds_effect", "in_known_ORF", "INFO"]
+
+                if gnomad_constraint is not None:
+                        constraint_df = pd.read_csv(gnomad_constraint, sep='\t')
+                        pli_vals = defaultdict(lambda: None, {k: v for k, v in zip(constraint_df['gene'], constraint_df['pLI'])})
+                        loeuf_vals = defaultdict(lambda: None, {k: v for k, v in zip(constraint_df['gene'], constraint_df['oe_lof_upper'])})
+                        df['pLI'] = [pli_vals[x] for x in df['gene_name']]
+                        df['LOEUF'] = [loeuf_vals[x] for x in df['gene_name']]
+                        export_columns = export_columns[:-1] + ['pLI', 'LOEUF', 'INFO']
 
                 df_atg = df.loc[df['codon_type'] == 'ATG']
-                df_atg = df_atg.drop(['zero', 'name_and_trans', 'symbol'], axis=1)
+                df_atg = df_atg.loc[:, export_columns]
                 df_non_atg = df.loc[df['codon_type'] == 'non-ATG']
-                df_non_atg = df_non_atg.drop(['zero', 'name_and_trans', 'symbol'], axis=1)
+                df_non_atg = df_non_atg.loc[:, export_columns]
                 # write optional output tsv file
                 df_atg.to_csv(f'{output}.atg.tsv', sep='\t', index=None)
                 df_non_atg.to_csv(f'{output}.non-atg.tsv', sep='\t', index=None)
@@ -966,7 +998,7 @@ if __name__ == '__main__':
 
                 # write new CSQ like INFO line
                 df['INFO_new'] = \
-                        [f'uBERT={int(x["orf_start"])}|'
+                        [f'uBERT_uORFs={int(x["orf_start"])}|'
                         f'{int(x["orf_end"])}|'
                         f'{x["strand"]}|'
                         f'{x["symbol"]}|'
@@ -977,23 +1009,30 @@ if __name__ == '__main__':
 
                 # add fields from 4-field bed file
                 df['INFO_new'] = df['INFO_new'].str.cat(df['bed_anno'], sep = '|')
-                df['INFO_new'] = df['INFO_new'].str.replace(',uBERT=', ',')
-                df['INFO_new'] = df['INFO_new'].astype(str) + ';'
+                df['INFO_new'] = df['INFO_new'].str.replace(',uBERT_uORFs=', ',')
+#                df['INFO_new'] = df['INFO_new'].astype(str) + ';'
+                atg_binarizer = {True: 'yes', False: 'no'}
                 # set main VCF fields
                 df = df.loc[:, ['#CHROM', 'POS', 'REF', 'ALT', 'INFO', 'INFO_new']]
 
                 # per variant multi-u-transcript annotation
                 df = df.groupby(['#CHROM', 'POS', 'REF', 'ALT', 'INFO'], sort=False)['INFO_new'].apply(','.join)
                 df = df.reset_index()
+                df['INFO_new'] = [f'{x};uBERT_ATG={atg_binarizer["|ATG" in x]}' for x in df['INFO_new']]
+                mce_short = {'': 'none', 'unassigned': 'none', 'main_CDS_unaffected': 'unaff', 'N-terminal_extension': 'ext', \
+                        'out-of-frame_overlap': 'overl', 'overlap_removal': 'activ'}
+                main_eff_list = ['&'.join(set([mce_short[x.split('|')[-7]] for x in y.split(',')])) for y in df['INFO_new']]
+                df['INFO_new'] = [f'{x};uBERT_eff={y}' for x, y in zip(df['INFO_new'], main_eff_list)]
+
 
                 # add rest obligate VCF-fields
                 df['ID'] = '.'
                 df['QUAL'] = '.'
                 df['FILTER'] = '.'
                 df['FORMAT'] = '.'
-                df['INFO_new'] = df['INFO_new'].str.replace(',uBERT=', ',')
+                df['INFO_new'] = df['INFO_new'].str.replace(',uBERT_uORFs=', ',')
                 df['INFO'] = df['INFO'].astype(str) + ';' + df['INFO_new'].astype(str)
-                df = df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']]
+                df = df.loc[:, ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']]
 
                 # remove output file before appending new data
                 out_vcf = Path(f'{output}.vcf')
@@ -1002,17 +1041,26 @@ if __name__ == '__main__':
 
                 # add header ##INFO uORF_annotator (uBERT) line
                 h += \
-                f'##INFO=<ID=uBERT,Number=.,Type=String,Description="Consequence uORF_annotator from uBERT. '
-                f'Format: ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|main_cds_effect|in_known_CDS|in_known_ORF{bed_4col_info}">'
+                f'##INFO=<ID=uBERT_uORFs,Number=.,Type=String,Description="Consequence uORF_annotator from uBERT. ' + \
+                f'Format: ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|main_cds_effect|in_known_CDS|in_known_ORF{bed_4col_info}">\n' + \
+                f'##INFO=<ID=uBERT_ATG,Number=.,Type=String,Description="A flag indicating if a variant falls within ATG-starting uORF.">\n' + \
+                f'##INFO=<ID=uBERT_eff,Number=.,Type=String,Description="Short notation of main CDS effect. ext - N-terminal extension, ' + \
+                'overl - out-of-frame overlap, activ - overlap removal with possible main ORF activation, unaff - no effect on main CDS">'
                 # write VCF-header and VCF-body in output file
                 with open(f'{output}.vcf', 'a') as w:
                         w.write(h)
                         w.write('\n')
                         df.to_csv(w, sep='\t', index=None)
                 
+                with open(f'{output}.browser.vcf', 'w') as w:
+                        w.write(h)
+                        w.write('\n')
+                        browse_df = df[[x != 'none' for x in main_eff_list]]
+                        browse_df.to_csv(w, sep='\t', index=None)
+                
                 atg_bed_handle.close()
                 non_atg_bed_handle.close()
-                sp.run(f'sort -k1,1 -k2,2n -k3,3n {tmp_atg_bed.name} | uniq - > {atg_bed}', shell=True)
-                sp.run(f'sort -k1,1 -k2,2n -k3,3n {tmp_non_atg_bed.name} | uniq - > {non_atg_bed}', shell=True)
+                sp.run(f'sort -k1,1 -k2,2n -k3,3n {tmp_atg_bed.name} | uniq - >> {atg_bed}', shell=True)
+                sp.run(f'sort -k1,1 -k2,2n -k3,3n {tmp_non_atg_bed.name} | uniq - >> {non_atg_bed}', shell=True)
         # run analysis
         main()
