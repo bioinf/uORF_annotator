@@ -1009,7 +1009,7 @@ if __name__ == '__main__':
 
                 # add fields from 4-field bed file
                 df['INFO_new'] = df['INFO_new'].str.cat(df['bed_anno'], sep = '|')
-                df['INFO_new'] = df['INFO_new'].str.replace(',uBERT_uORFs=', ',')
+                df['INFO_new'] = df['INFO_new'].str.replace(',uORFs=', ',')
 #                df['INFO_new'] = df['INFO_new'].astype(str) + ';'
                 atg_binarizer = {True: 'yes', False: 'no'}
                 # set main VCF fields
@@ -1018,11 +1018,11 @@ if __name__ == '__main__':
                 # per variant multi-u-transcript annotation
                 df = df.groupby(['#CHROM', 'POS', 'REF', 'ALT', 'INFO'], sort=False)['INFO_new'].apply(','.join)
                 df = df.reset_index()
-                df['INFO_new'] = [f'{x};uBERT_ATG={atg_binarizer["|ATG" in x]}' for x in df['INFO_new']]
+                df['INFO_new'] = [f'{x};uORFs_ATG={atg_binarizer["|ATG" in x]}' for x in df['INFO_new']]
                 mce_short = {'': 'none', 'unassigned': 'none', 'main_CDS_unaffected': 'unaff', 'N-terminal_extension': 'ext', \
                         'out-of-frame_overlap': 'overl', 'overlap_removal': 'activ'}
                 main_eff_list = ['&'.join(set([mce_short[x.split('|')[-7]] for x in y.split(',')])) for y in df['INFO_new']]
-                df['INFO_new'] = [f'{x};uBERT_eff={y}' for x, y in zip(df['INFO_new'], main_eff_list)]
+                df['INFO_new'] = [f'{x};uORFs_eff={y}' for x, y in zip(df['INFO_new'], main_eff_list)]
 
 
                 # add rest obligate VCF-fields
@@ -1041,10 +1041,10 @@ if __name__ == '__main__':
 
                 # add header ##INFO uORF_annotator (uBERT) line
                 h += \
-                f'##INFO=<ID=uBERT_uORFs,Number=.,Type=String,Description="Consequence uORF_annotator from uBERT. ' + \
+                f'##INFO=<ID=uORFs,Number=.,Type=String,Description="Consequence uORF_annotator from uBERT. ' + \
                 f'Format: ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|main_cds_effect|in_known_CDS|in_known_ORF{bed_4col_info}">\n' + \
-                f'##INFO=<ID=uBERT_ATG,Number=.,Type=String,Description="A flag indicating if a variant falls within ATG-starting uORF.">\n' + \
-                f'##INFO=<ID=uBERT_eff,Number=.,Type=String,Description="Short notation of main CDS effect. ext - N-terminal extension, ' + \
+                f'##INFO=<ID=uORFs_ATG,Number=.,Type=String,Description="A flag indicating if a variant falls within ATG-starting uORF.">\n' + \
+                f'##INFO=<ID=uORFs_eff,Number=.,Type=String,Description="Short notation of main CDS effect. ext - N-terminal extension, ' + \
                 'overl - out-of-frame overlap, activ - overlap removal with possible main ORF activation, unaff - no effect on main CDS">'
                 # write VCF-header and VCF-body in output file
                 with open(f'{output}.vcf', 'a') as w:
