@@ -60,9 +60,7 @@ The generated VCF output contains all variants affecting uORF sequences. Each va
 
 *uORF Annotator* generates two BED files with uORFs affected by variants that alter the uORF length (one file contains ATG uORFs and the other contains non-ATG-started uORFs). Both BED files contain two entries for each affected uORF: 
 1) initial uORF, its `name` field format: uORF_unique_number-gene_name|uORF_type|start_codon_type(ATG/non-AT), filled with black color; 
-2) resulting uORF after introduction of a variant,  its `name` field format: uORF_unique_number-gene_name|variant|variant_type|main_CDS_effect,  filled with different colors depending on the effect. 
-
-Color legend: 
+2) resulting uORF after introduction of a variant,  its `name` field format: uORF_unique_number-gene_name|variant|variant_type|main_CDS_effect,  filled with different colors depending on the effect. Color legend: 
 * Grey features - cases when the variant does not change the overlap between uORF and main CDS.
 * Orange features - cases when (a) uORF-truncating variant eliminates the existing overlap between uORF and main CDS; or (b) variant leads to the production of a chimeric protein product of the gene, possessing an extension at the N-terminus resulting from uORF translation
 * Red features - cases where variant leads to the appearance of a new overlapping segment between uORF and main gene CDS, with the two sequences translated in different frames.
