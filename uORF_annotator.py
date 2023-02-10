@@ -346,7 +346,6 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, gene_dict, h, atg_be
         #exons_gtf_df.index = exons_gtf_df['id']
         #print(' ======= CDS DATA ======= ')
         #print(exons_gtf_df)
-        exons_gtf_df.to_csv('look_at_me.tsv', sep='\t', index=False)
         ################
 
                 
@@ -430,9 +429,7 @@ def check_overlapping(df, gtf, h, fasta, bed_4col_info_cols) -> pd.core.frame.Da
         sp.run(f'bedtools intersect -wo -a {tmp_vcf2.name} -b {tmp_bed2.name} | cut -f1,2,4,5 | sort -k1,1 -k2,2n > {tmp_tsv.name}', shell=True)
         check_cds_df = pd.read_table(tmp_tsv.name, header=None)
         check_cds_df.columns = ['#CHROM', 'POS', 'REF', 'ALT']
-        df.to_csv('df.tsv', sep='\t', index=None)
         check_cds_df['in_known_ORF'] = 'YES'
-        check_cds_df.to_csv('check_cds_df.tsv', sep='\t', index=None)
 
         df = pd.merge(df, check_cds_df, on=['#CHROM', 'POS', 'REF', 'ALT'], how='left')
         df = df.fillna({'in_known_ORF':'NO'})
