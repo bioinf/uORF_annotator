@@ -1,44 +1,42 @@
 from file_processor import GTFFile, VCFFile, BEDFile
-from annotator import BedtoolsIntersect, AnnotationProcessor
+from annotator import Bedtools, DataProcessor
 
 
 class Pipeline:
 	def __init__(self, gtf_file_path, vcf_file_path, bed_file_path):
-		self.gtf_file = GTFFile(gtf_file_path)
-		self.vcf_file = VCFFile(vcf_file_path)
-		self.bed_file = BEDFile(bed_file_path)
-		self.intersector = BedtoolsIntersect("/tmp")
-		self.processor = AnnotationProcessor()
+		self.gtf = GTFFile(gtf_file_path)
+		self.vcf = VCFFile(vcf_file_path)
+		self.bed = BEDFile(bed_file_path)
+		self.intersected_bed = ''
+		self.processor = DataProcessor()
 
 	def run(self):
-		gene_transcript_records = self._get_gene_transcript_records()
-		vcf_header = self._read_vcf_header()
-		source_bed_lines = self._process_bed_file()
-		intersection_file = self._intersect_vcf_and_bed()
-		bed_4col_info_cols = self._get_bed_4col_info_cols()
-		data_annotated = self._process_annotation(intersection_file.name, bed_4col_info_cols, gene_transcript_records)
-		exons_file = self._process_gtf_file()
+		self._initial_process_gtf_file()
+		self._process_vcf_file()
+		self._process_bed_file()
+		self._intersect_vcf_and_bed()
+		self._process_data()
+		# print(self.gtf.uorf_df)
 
-	def _get_gene_transcript_records(self):
-		return self.gtf_file.get_gene_transcript_records()
+	def _initial_process_gtf_file(self):
+		self.gtf.process_gtf_file()
 
-	def _read_vcf_header(self):
-		return self.vcf_file.read_header()
+	def _process_vcf_file(self):
+		return self.vcf.process_vcf_file()
 
 	def _process_bed_file(self):
-		return self.bed_file.process_bed_file()
+		return self.bed.process_bed_file()
 
 	def _intersect_vcf_and_bed(self):
-		return self.intersector.intersect(self.vcf_file.file_path, self.bed_file.file_path)
+		self.intersected_bed = Bedtools.intersect(self.vcf.file_path, self.bed.file_path)
 
-	def _get_bed_4col_info_cols(self):
-		return self.bed_file.bed_4col_info_cols
+	def _process_data(self):
+		intersection_file_path = self.intersected_bed
+		bed_4col_info_cols = self.bed.bed_4col_info_cols
+		gene_transcript_records = self.gtf.gene_transcript
+		source_gtf = self.gtf.source_gtf
+		self.processor.process_data(intersection_file_path, bed_4col_info_cols, gene_transcript_records, source_gtf)
 
-	def _process_annotation(self, intersection_file_path, bed_4col_info_cols, gene_transcript_records):
-		return self.processor.process_data(intersection_file_path, bed_4col_info_cols, gene_transcript_records)
-
-	def _process_gtf_file(self):
-		return self.gtf_file.process_gtf_file()
 
 
 if __name__ == "__main__":

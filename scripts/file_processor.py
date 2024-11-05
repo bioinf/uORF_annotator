@@ -2,77 +2,77 @@ from logger import Logger
 from temporary_file_manager import TemporaryFileManager
 
 import re
-import gzip
 import pandas as pd
 
 
 class GTFFile:
 	def __init__(self, file_path):
 		self.file_path = file_path
-
-	def get_gene_transcript_records(self):
-		gene_transcript = {}
-		with gzip.open(self.file_path, 'rt') as gtf_handle:
-			for line in gtf_handle:
-				if 'gene_id' not in line and 'transcript_id' not in line:
-					continue
-				gene_name = re.findall('gene_id \"([^\"]+)', line)[0]
-				transcript_id = re.findall('transcript_id \"([^\"^\.]+)', line)[0]
-				gene_transcript[transcript_id] = gene_name
-		Logger.log_gene_transcript_records(len(gene_transcript))
-		return gene_transcript
+		self.source_gtf = None
+		self.gene_transcript = None
+		self.export_exons = None
 
 	def process_gtf_file(self):
+		self._load_gtf_data()
+		self._extract_gene_transcript()
+		self._extract_exons_data()
+		self._extract_bed_anno()
+		self._logger()
 
-		source_gtf = pd.read_csv(self.file_path, sep='\t', comment='#', header=None)
-		source_gtf.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
-		source_gtf['start'] = [int(x) - 1 for x in source_gtf['start']]
-		source_gtf['end'] = [int(x) for x in source_gtf['end']]
-		ok_rows = [bool(re.search('(NM_|ENST)\d+', x)) for x in source_gtf['info']]
-		source_gtf = source_gtf.loc[ok_rows]
-		source_gtf['transcript'] = [re.findall('transcript_id \"((NM_|ENST)\d+)', x)[0][0] for x in source_gtf['info']]
+	def _load_gtf_data(self):
+		self.source_gtf = pd.read_csv(self.file_path, sep='\t', comment='#', header=None)
+		self.source_gtf.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
+		self.source_gtf['start'] = self.source_gtf['start'].astype(int) - 1
+		self.source_gtf['end'] = self.source_gtf['end'].astype(int)
+		self.source_gtf = self.source_gtf.loc[self.source_gtf['info'].str.contains('(NM_|ENST)\d+')]
 
-		exons_gtf = source_gtf.loc[source_gtf['type'] == 'exon']
-		export_exons = exons_gtf.loc[:, ['chr', 'start', 'end', 'transcript', 'score', 'strand']]
-		export_exons = export_exons.sort_values(by=['chr', 'transcript'])
-		export_exons = export_exons.drop_duplicates()
+	def _extract_gene_transcript(self):
+		self.gene_transcript = self.source_gtf['info'].str.extract(r'gene_id \"([^\"]+)', expand=False).to_dict()
 
-		Logger.log_num_exons_after_gtf_processing(export_exons.shape[0])
+	def _extract_bed_anno(self):
+		self.source_gtf['transcript'] = self.source_gtf['info'].str.extract(r'transcript_id \"((NM_|ENST)\d+)', expand=False)[0]
 
+	def _extract_exons_data(self):
+		self.export_exons = self.source_gtf.loc[self.source_gtf['type'] == 'exon']
+		self.export_exons = self.export_exons.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
+		self.export_exons = self.export_exons.sort_values(by=['chr', 'start']).drop_duplicates()
 
-		tmp_exons_bed = TemporaryFileManager.create('.bed')
-		export_exons.to_csv(tmp_exons_bed.name, sep='\t', header=False, index=False)
-
-		tmp_exons_bed.register_at_exit()
-
-		return tmp_exons_bed
+	def _logger(self):
+		Logger.log_num_exons_after_gtf_processing(self.export_exons.shape[0])
 
 class VCFFile:
 	def __init__(self, file_path):
 		self.file_path = file_path
+		self.header_lines = []
 
-	def read_header(self):
-		header_lines = []
+	def process_vcf_file(self):
+		self._read_header()
+
+	def _read_header(self):
 		with open(self.file_path, 'r') as f:
 			for line in f:
 				if line.startswith('##'):
-					header_lines.append(line.strip())
+					self.header_lines.append(line.strip())
 				elif line.startswith('#CHROM'):
 					break
 
-		return "\n".join(header_lines)
+		return "\n".join(self.header_lines)
 
 class BEDFile:
-	bed_4col_info = '|utid|overlapping_type|dominance_type|codon_type'
-	bed_4col_info_cols = bed_4col_info.split('|')[1:]
 
 	def __init__(self, file_path):
 		self.file_path = file_path
+		self.bed_4col_info = '|utid|overlapping_type|dominance_type|codon_type'
+		self.bed_4col_info_cols = self.bed_4col_info.split('|')[1:]
+		self.source_bed_lines = {}
 
 	def process_bed_file(self):
+		self._parse_file()
+		self._logger()
+
+	def _parse_file(self):
 		orf_count = 1
 		with open(self.file_path, 'r') as bed_file:
-			source_bed_lines = {}
 			for line in bed_file:
 				if line.startswith('#'):
 					continue
@@ -81,10 +81,8 @@ class BEDFile:
 				uo_name = self._create_uo_name(columns, trans_id)
 				columns[3] = self._update_custom_annotation(orf_count, columns[3])
 				orf_count += 1
-				source_bed_lines[uo_name] = columns.copy()
-		Logger.log_processed_bed_records(len(source_bed_lines))
-		return source_bed_lines
-
+				self.source_bed_lines[uo_name] = columns.copy()
+	
 	def _extract_trans_id(self, column_3):
 		return re.findall('[NMENST]+_*\d+', column_3)[0]
 
@@ -97,3 +95,6 @@ class BEDFile:
 
 	def get_source_bed_lines(self):
 		return self.source_bed_lines
+
+	def _logger(self):
+		Logger.log_processed_bed_records(len(self.source_bed_lines))

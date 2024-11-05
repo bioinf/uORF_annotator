@@ -18,3 +18,11 @@ class Logger:
 	@staticmethod
 	def log_num_exons_after_gtf_processing(n_rows):
 		print(f"Number of exons in BED file after GTF processing: {n_rows}")
+	
+	@staticmethod
+	def log_num_records_in_table_after_annotation_processing_2(shape):
+		print(f"Number of rows and columns in table after uORF extraction: {shape}")
+
+	@staticmethod
+	def log_num_records_in_table_after_annotation_processing_3(shape):
+		print(f"Number of rows and columns in table after interorf_single processing: {shape}")

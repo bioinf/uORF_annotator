@@ -113,7 +113,25 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, gene_dict, h, atg_be
         export_exons.to_csv(tmp_exons_bed.name, sep='\t', header=False, index=False)
         sp.run(f'sort -k1,1 -k4,4n {tmp_exons_bed.name} | uniq > {tmp_exons_sorted.name}', shell=True)
 
+
+        first_cds = {}
         cds_gtf = source_gtf.loc[source_gtf['type'] == 'CDS']
+        for idx, row_data in cds_gtf.iterrows():
+                if row_data['transcript'] not in first_cds:
+                        first_cds[row_data['transcript']] = row_data
+                        continue
+                if (row_data['strand'] == '-') and (first_cds[row_data['transcript']]['start'] < row_data['start']):
+                        first_cds[row_data['transcript']] = row_data
+        first_cds_df = pd.DataFrame(first_cds).T
+        first_cds_df.index = first_cds_df['transcript']
+
+        def get_true_cds_start(tr_id, first_cds_df=first_cds_df):
+                if tr_id not in first_cds_df.index:
+                        return None
+                gtf_row = first_cds_df.loc[tr_id]
+                if gtf_row['strand'] == '+':
+                        return gtf_row['start']
+                return gtf_row['end']
 
         uorf_df = df.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', \
                         'exons_sizes', 'exons_starts', 'name', 'name_and_trans']]
@@ -151,25 +169,6 @@ def process(input_vcf, bed, fasta, bed_4col_info_cols, gtf, gene_dict, h, atg_be
         #uorf_df['exons_starts'] = [(o + x for x in e) for o, e in zip(uorf_df['orf_start'], uorf_df['exons_norm_starts'])]
         uorf_df.index = uorf_df['id']
         #print(uorf_df.loc['chr11:31806911-31810840(-)'])
-
-        first_cds = {}
-        for idx, row_data in cds_gtf.iterrows():
-                if row_data['transcript'] not in first_cds:
-                        first_cds[row_data['transcript']] = row_data
-                        continue
-                if (row_data['strand'] == '-') and (first_cds[row_data['transcript']]['start'] < row_data['start']):
-                     first_cds[row_data['transcript']] = row_data
-        first_cds_df = pd.DataFrame(first_cds).T
-        #print(first_cds_df)
-        first_cds_df.index = first_cds_df['transcript']
-
-        def get_true_cds_start(tr_id, first_cds_df=first_cds_df):
-                if tr_id not in first_cds_df.index:
-                        return None
-                gtf_row = first_cds_df.loc[tr_id]
-                if gtf_row['strand'] == '+':
-                        return gtf_row['start']
-                return gtf_row['end']
 
         uorf_df['cds_start'] = [get_true_cds_start(x) for x in uorf_df['transcript']]
         #print(uorf_df)
