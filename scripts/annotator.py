@@ -6,6 +6,8 @@ import pandas as pd
 import subprocess
 import re
 
+import hashlib
+
 
 class Bedtools:
 	@staticmethod
@@ -42,6 +44,10 @@ class DataProcessor:
 		self._logger_2()
 		self._extract_interorf_data()
 		self._logger_3()
+		md5sum_uorf = hashlib.md5(self.uorf_data.to_csv(index=False).encode()).hexdigest()
+		md5sum_interorf = hashlib.md5(self.interorf_single.to_csv(index=False).encode()).hexdigest()
+		print("md5sum:", md5sum_uorf)
+		print("md5sum:", md5sum_interorf)
 
 	def _logger_1(self):
 		Logger.log_num_records_in_table_after_annotation_processing_1(self.data.shape)
@@ -78,64 +84,38 @@ class DataProcessor:
 		self.data['transcript'] = self.data.apply(lambda x: re.findall('[NMENSTX]+_*\d+', x['bed_anno'])[0], axis=1)
 		self.data['gene_name'] = self.data.apply(lambda x: gene_transcript_records.get(x['transcript'], ''), axis=1)
 		self.data['name_and_trans'] = self.data.apply(lambda x: f"{x['name']}/{x['transcript']}", axis=1)
-
+	
 	def _get_first_cds(self, source_gtf):
-		first_cds = {}
-		cds_gtf = source_gtf.loc[source_gtf['type'] == 'CDS']
-		for _, row_data in cds_gtf.iterrows():
-			if row_data['transcript'] not in first_cds:
-				first_cds[row_data['transcript']] = row_data
-				continue
-			if (row_data['strand'] == '-') and (first_cds[row_data['transcript']]['start'] < row_data['start']):
-				first_cds[row_data['transcript']] = row_data
-		self.first_cds_df = pd.DataFrame(first_cds).T
+		self.first_cds_df = source_gtf.loc[source_gtf['type'] == 'CDS'].sort_values(['transcript', 'strand', 'start']).groupby('transcript').apply(lambda x: x.iloc[0] if x['strand'].iloc[0] == '+' else x.iloc[-1]).reset_index(drop=True)
 		self.first_cds_df.index = self.first_cds_df['transcript']
 
 	def _get_true_cds_start(self, tr_id):
-		if tr_id not in self.first_cds_df.index:
-			return None
-		gtf_row = self.first_cds_df.loc[tr_id]
-		if gtf_row['strand'] == '+':
-			return gtf_row['start']
-		return gtf_row['end']
+		return self.first_cds_df.loc[tr_id, 'start'] if tr_id in self.first_cds_df.index and self.first_cds_df.loc[tr_id, 'strand'] == '+' else self.first_cds_df.loc[tr_id, 'end'] if tr_id in self.first_cds_df.index else None
 
 	def _extract_uorf_data(self):
-		self.uorf_data = self.data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 
-											'exons_sizes', 'exons_starts', 'name', 'name_and_trans']]
-		self.uorf_data.columns = ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 
-								'exons_sizes', 'exons_norm_starts', 'id', 'name_and_trans']
-
-		self.uorf_data['exons_norm_starts'] = self.uorf_data['exons_norm_starts'].apply(lambda x: str(x))
-		self.uorf_data['exons_sizes'] = self.uorf_data['exons_sizes'].apply(lambda x: str(x))
-
-		self.uorf_data = self.uorf_data.drop_duplicates()
-
-		exons = []
-		norm_exons = []
-		for _, row in self.uorf_data.iterrows():
-			orf_len = row['orf_end'] - row['orf_start']
-			if row['strand'] == '+':
-				exons.append([row['orf_start'] + eStart for eStart in eval(row['exons_norm_starts'])])
-				norm_exons.append(eval(row['exons_norm_starts']))
-			else:
-				exons.append([row['orf_start'] + eStart + eSize for eStart, eSize in zip(eval(row['exons_norm_starts']), eval(row['exons_sizes']))][::-1])
-				norm_exons.append([orf_len - eStart - eSize for eStart, eSize in zip(eval(row['exons_norm_starts']), eval(row['exons_sizes']))][::-1])
-
-		self.uorf_data['exons_starts'] = exons
-		self.uorf_data['exons_norm_starts'] = norm_exons
-
-		self.uorf_data['exons_sizes'] = self.uorf_data.apply(lambda row: eval(row['exons_sizes']) if row['strand'] == '+' else eval(row['exons_sizes'])[::-1], axis=1)
+		self.uorf_data = self.data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name', 'name_and_trans']].copy()
+		self.uorf_data.columns = ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_norm_starts', 'id', 'name_and_trans']
+		self.uorf_data = self.uorf_data.applymap(lambda x: str(x) if isinstance(x, list) else x).drop_duplicates()
+		self.uorf_data['exons_norm_starts'] = self.uorf_data['exons_norm_starts'].apply(eval)
+		self.uorf_data['exons_sizes'] = self.uorf_data['exons_sizes'].apply(eval)
+		self.uorf_data[['exons_starts', 'exons_norm_starts']] = self.uorf_data.apply(self._process_exons, axis=1, result_type='expand')
+		self.uorf_data['exons_sizes'] = self.uorf_data.apply(lambda row: row['exons_sizes'] if row['strand'] == '+' else row['exons_sizes'][::-1], axis=1)
 		self.uorf_data.index = self.uorf_data['id']
-		self.uorf_data['cds_start'] = [self._get_true_cds_start(x) for x in self.uorf_data['transcript']]
+		self.uorf_data['cds_start'] = self.uorf_data['transcript'].apply(self._get_true_cds_start)
+
+	def _process_exons(self, row):
+		orf_len = row['orf_end'] - row['orf_start']
+		exons_norm_starts = row['exons_norm_starts']
+		exons_sizes = row['exons_sizes']
+		if row['strand'] == '+':
+			return [row['orf_start'] + eStart for eStart in exons_norm_starts], exons_norm_starts
+		else:
+			return [row['orf_start'] + eStart + eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)][::-1], [orf_len - eStart - eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)][::-1]
 
 	def _extract_interorf_data(self):
-		interorf_data = []
-		for _, row_data in self.uorf_data.iterrows():
-			if (row_data['strand'] == '+') and (row_data['orf_end'] < row_data['cds_start']):
-				interorf_data.append(row_data[['#CHROM', 'orf_end', 'cds_start', 'name_and_trans']].values)
-			elif row_data['cds_start'] < row_data['orf_start']:
-				interorf_data.append(row_data[['#CHROM', 'cds_start', 'orf_start', 'name_and_trans']].values)
-		
-		self.interorf_single = pd.DataFrame(interorf_data, columns=['chr', 'start', 'end', 'name_and_trans'])
-		self.interorf_single = self.interorf_single.dropna()
+		mask = ((self.uorf_data['strand'] == '+') & (self.uorf_data['orf_end'] < self.uorf_data['cds_start'])) | (self.uorf_data['cds_start'] < self.uorf_data['orf_start'])
+		interorf_data = self.uorf_data[mask].copy()
+		interorf_data.loc[interorf_data['strand'] == '+', ['start', 'end']] = interorf_data.loc[interorf_data['strand'] == '+', ['orf_end', 'cds_start']].values
+		interorf_data.loc[interorf_data['strand'] != '+', ['start', 'end']] = interorf_data.loc[interorf_data['strand'] != '+', ['cds_start', 'orf_start']].values
+		self.interorf_single = interorf_data[['#CHROM', 'start', 'end', 'name_and_trans']].rename(columns={'#CHROM': 'chr'}).dropna()
 		self.interorf_single[['start', 'end']] = self.interorf_single[['start', 'end']].astype(int)
