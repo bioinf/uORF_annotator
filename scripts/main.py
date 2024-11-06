@@ -1,5 +1,5 @@
-from file_processor import GTFFile, VCFFile, BEDFile
-from annotator import Bedtools, DataProcessor
+from data_loader import GTFFile, VCFFile, BEDFile
+from data_processor import Bedtools, DataProcessor
 
 
 class Pipeline:

@@ -31,6 +31,10 @@ class DataProcessor:
 		self.first_cds_df = None
 		self.uorf_data = None
 		self.interorf_single = None
+		self.export_exons_file = None
+		self.tmp_interorf_single_file = None
+		self.source_gtf = None
+		self.tmp_io_exon_isec_tab_file = None
 
 	def process_data(self, intersection_file_path, bed_4col_info_cols, gene_transcript_records, source_gtf):
 		self._load_data(intersection_file_path)
@@ -39,11 +43,14 @@ class DataProcessor:
 		self._extract_distancies_from_orf_to_snp()
 		self._extract_names(gene_transcript_records)
 		self._logger_1()
+		self._extract_exons_data(source_gtf)
+		self._logger_2
 		self._get_first_cds(source_gtf)
 		self._extract_uorf_data()
-		self._logger_2()
-		self._extract_interorf_data()
 		self._logger_3()
+		self._extract_interorf_data()
+		self._logger_4()
+		self._intersect_interorf_with_exons()
 		md5sum_uorf = hashlib.md5(self.uorf_data.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorf = hashlib.md5(self.interorf_single.to_csv(index=False).encode()).hexdigest()
 		print("md5sum:", md5sum_uorf)
@@ -53,9 +60,12 @@ class DataProcessor:
 		Logger.log_num_records_in_table_after_annotation_processing_1(self.data.shape)
 
 	def _logger_2(self):
-		Logger.log_num_records_in_table_after_annotation_processing_2(self.uorf_data.shape)
+		Logger.log_num_exons_after_gtf_processing(self.export_exons.shape[0])
 
 	def _logger_3(self):
+		Logger.log_num_records_in_table_after_annotation_processing_2(self.uorf_data.shape)
+
+	def _logger_4(self):
 		Logger.log_num_records_in_table_after_annotation_processing_3(self.interorf_single.shape)
 
 	def _load_data(self, intersection_file_path):
@@ -84,7 +94,15 @@ class DataProcessor:
 		self.data['transcript'] = self.data.apply(lambda x: re.findall('[NMENSTX]+_*\d+', x['bed_anno'])[0], axis=1)
 		self.data['gene_name'] = self.data.apply(lambda x: gene_transcript_records.get(x['transcript'], ''), axis=1)
 		self.data['name_and_trans'] = self.data.apply(lambda x: f"{x['name']}/{x['transcript']}", axis=1)
-	
+
+	def _extract_exons_data(self, source_gtf):
+		self.export_exons = source_gtf.loc[source_gtf['type'] == 'exon']
+		self.export_exons = self.export_exons.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
+		self.export_exons = self.export_exons.sort_values(by=['chr', 'start']).drop_duplicates()
+
+		self.export_exons_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+		self.export_exons.to_csv(self.export_exons_file.name, sep='\t', header=False, index=False)
+
 	def _get_first_cds(self, source_gtf):
 		self.first_cds_df = source_gtf.loc[source_gtf['type'] == 'CDS'].sort_values(['transcript', 'strand', 'start']).groupby('transcript').apply(lambda x: x.iloc[0] if x['strand'].iloc[0] == '+' else x.iloc[-1]).reset_index(drop=True)
 		self.first_cds_df.index = self.first_cds_df['transcript']
@@ -119,3 +137,25 @@ class DataProcessor:
 		interorf_data.loc[interorf_data['strand'] != '+', ['start', 'end']] = interorf_data.loc[interorf_data['strand'] != '+', ['cds_start', 'orf_start']].values
 		self.interorf_single = interorf_data[['#CHROM', 'start', 'end', 'name_and_trans']].rename(columns={'#CHROM': 'chr'}).dropna()
 		self.interorf_single[['start', 'end']] = self.interorf_single[['start', 'end']].astype(int)
+		self.tmp_interorf_single_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+		self.interorf_single.to_csv(self.tmp_interorf_single_file.name, sep='\t', header=False, index=False)
+
+	def _intersect_interorf_with_exons(self):
+
+		self.tmp_io_exon_isec_tab_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+		print(self.tmp_interorf_single_file.name)
+		print(self.tmp_io_exon_isec_tab_file.name)
+		print(self.export_exons_file.name)
+
+		# Write interorf data to tmp_interorf_single file
+		# self.interorf_single.to_csv(self.tmp_interorf_single.name, sep='\t', index=False)
+
+	# 	# Write exons data to tmp_exons_sorted file
+		# self.exons_sorted.to_csv(self.tmp_exons_sorted.name, sep='\t', index=False)
+
+		bedtools_output = Bedtools.intersect(self.tmp_interorf_single_file.name, self.export_exons_file.name, tmp_dir='/tmp')
+		with open(self.tmp_io_exon_isec_tab_file.name, 'w') as w:
+			w.write(bedtools_output)
+
+	# 	# Read the intersection results from tmp_io_exon_isec_tab file
+	# 	self.io_exon_isec_tab = pd.read_csv(tmp_io_exon_isec_tab.name, sep='\t')

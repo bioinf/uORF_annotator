@@ -10,12 +10,10 @@ class GTFFile:
 		self.file_path = file_path
 		self.source_gtf = None
 		self.gene_transcript = None
-		self.export_exons = None
 
 	def process_gtf_file(self):
 		self._load_gtf_data()
 		self._extract_gene_transcript()
-		self._extract_exons_data()
 		self._extract_bed_anno()
 		self._logger()
 
@@ -32,13 +30,8 @@ class GTFFile:
 	def _extract_bed_anno(self):
 		self.source_gtf['transcript'] = self.source_gtf['info'].str.extract(r'transcript_id \"((NM_|ENST)\d+)', expand=False)[0]
 
-	def _extract_exons_data(self):
-		self.export_exons = self.source_gtf.loc[self.source_gtf['type'] == 'exon']
-		self.export_exons = self.export_exons.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
-		self.export_exons = self.export_exons.sort_values(by=['chr', 'start']).drop_duplicates()
-
 	def _logger(self):
-		Logger.log_num_exons_after_gtf_processing(self.export_exons.shape[0])
+		Logger.log_num_rows_and_columns_in_gtf_after_processing(self.source_gtf.shape[0])
 
 class VCFFile:
 	def __init__(self, file_path):

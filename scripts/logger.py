@@ -26,3 +26,7 @@ class Logger:
 	@staticmethod
 	def log_num_records_in_table_after_annotation_processing_3(shape):
 		print(f"Number of rows and columns in table after interorf_single processing: {shape}")
+
+	@staticmethod
+	def log_num_rows_and_columns_in_gtf_after_processing(n_rows):
+		print(f"Number of rows and columns in GTF after processing: {n_rows}")
