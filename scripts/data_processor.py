@@ -55,8 +55,8 @@ class DataProcessor:
 		md5sum_uorf = hashlib.md5(self.uorf_data.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorf = hashlib.md5(self.interorf_single.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorfs_bed_df = hashlib.md5(self.interorfs_bed_df.to_csv(index=False).encode()).hexdigest()
-		print("md5sum:", md5sum_uorf)
-		print("md5sum:", md5sum_interorf)
+		# print("md5sum:", md5sum_uorf)
+		# print("md5sum:", md5sum_interorf)
 		print("md5sum:", md5sum_interorfs_bed_df)
 
 
@@ -146,9 +146,10 @@ class DataProcessor:
 
 
 	def _intersect_interorf_with_exons(self):
-		self.tmp_io_exon_isec_tab_file = Bedtools.intersect(self.tmp_interorf_single_file.name, self.export_exons_file.name, tmp_dir='/tmp')
-		self.tmp_interorfs_bed_file = TemporaryFileManager.create('.bed')
-		with open(self.tmp_io_exon_isec_tab_file.name, 'r') as isec_handle, open(self.tmp_interorfs_bed_file.name, 'w') as isec_out:
+		self.tmp_io_exon_isec_tab_file = Bedtools.intersect(self.tmp_interorf_single_file.name, self.export_exons_file.name)
+
+		interorfs_bed_dict = {}
+		with open(self.tmp_io_exon_isec_tab_file.name, 'r') as isec_handle:
 			for line in isec_handle:
 				content = line.strip().split('\t')
 				uorf_tr_id = content[3].split('/')[1]
@@ -156,34 +157,27 @@ class DataProcessor:
 				if uorf_tr_id == transcript_id_match:
 					rstart = max(int(content[1]), int(content[5]))
 					rend = min(int(content[2]), int(content[6]))
-					out_line = f'{content[0]}\t{rstart}\t{rend}\t{content[3]}\t{content[8]}\t{content[9]}\n'
-					isec_out.write(out_line)
+					out_line = [content[0], str(rstart), str(rend), content[3], content[8], content[9]]
 
-		interorfs_bed_list = [line.rstrip().split('\t') for line in open(self.tmp_interorfs_bed_file.name).read().split('\n') if line != '']
-		interorfs_bed_dict = defaultdict(lambda: defaultdict(list))
-		for bed_line in interorfs_bed_list:
-			key = bed_line[3]
-			interorfs_bed_dict[key]['chr'] = bed_line[0]
-			interorfs_bed_dict[key]['strand'] = bed_line[-1]
-			interorfs_bed_dict[key]['exons_sizes'].append(int(bed_line[2])-int(bed_line[1]))
-			if interorfs_bed_dict[key]['strand'] ==  '+':
-				interorfs_bed_dict[key]['exons_starts'].append(int(bed_line[1]))
-			elif interorfs_bed_dict[key]['strand'] ==  '-':
-				interorfs_bed_dict[key]['exons_starts'].append(int(bed_line[2]))
-		for k in interorfs_bed_dict.keys():
-			if interorfs_bed_dict[k]['strand'] == '+':
-				starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'])
-				interorfs_bed_dict[k]['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, interorfs_bed_dict[k]['exons_sizes']))]
-				contig = interorfs_bed_dict[k]['chr']
-				interorfs_bed_dict[k]['exons_norm_starts'] = [i-starts_sorted[0] for i in starts_sorted]
-			elif interorfs_bed_dict[k]['strand'] == '-':
-				size_dict = {k: v for k, v in zip(interorfs_bed_dict[k]['exons_starts'], interorfs_bed_dict[k]['exons_sizes'])}
-				starts_sorted = sorted(interorfs_bed_dict[k]['exons_starts'], reverse=True)
-				interorfs_bed_dict[k]['exons_sizes'] = [size_dict[x] for x in starts_sorted]
-				contig = interorfs_bed_dict[k]['chr']
-				interorfs_bed_dict[k]['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
-				interorfs_bed_dict[k]['exons_starts'] = starts_sorted
-		interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
-		interorfs_bed_df['id'] = interorfs_bed_df.index
-		self.interorfs_bed_df = interorfs_bed_df
+					key = out_line[3]
+					if key not in interorfs_bed_dict:
+						interorfs_bed_dict[key] = {'chr': out_line[0], 'strand': out_line[-1], 'exons_sizes': [], 'exons_starts': []}
+					interorfs_bed_dict[key]['exons_sizes'].append(int(out_line[2]) - int(out_line[1]))
+					interorfs_bed_dict[key]['exons_starts'].append(int(out_line[1]) if out_line[-1] == '+' else int(out_line[2]))
 
+		for k, v in interorfs_bed_dict.items():
+			if v['strand'] == '+':
+				starts_sorted = sorted(v['exons_starts'])
+				v['exons_sizes'] = [x for _, x in sorted(zip(starts_sorted, v['exons_sizes']))]
+				v['exons_norm_starts'] = [i-starts_sorted[0] for i in starts_sorted]
+			elif v['strand'] == '-':
+				size_dict = dict(zip(v['exons_starts'], v['exons_sizes']))
+				starts_sorted = sorted(v['exons_starts'], reverse=True)
+				v['exons_sizes'] = [size_dict[x] for x in starts_sorted]
+				v['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
+				v['exons_starts'] = starts_sorted
+
+		self.interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
+		self.interorfs_bed_df['id'] = self.interorfs_bed_df.index
+		self.interorfs_bed_df.to_csv('test2.tsv', sep='\t', header=True, index=False)
+		print(self.interorfs_bed_df.shape)
