@@ -28,7 +28,7 @@ class Pipeline:
 		return self.bed.process_bed_file()
 
 	def _intersect_vcf_and_bed(self):
-		self.intersected_bed = Bedtools.intersect(self.vcf.file_path, self.bed.file_path)
+		self.intersected_bed = Bedtools.intersect(self.vcf.file_path, self.bed.file_path).name
 
 	def _process_data(self):
 		intersection_file_path = self.intersected_bed
@@ -41,6 +41,8 @@ class Pipeline:
 
 if __name__ == "__main__":
 	import argparse
+
+	"python scripts/main.py data/combined_uorf.v4.gtf.gz data/HGMD_resort.vcf data/sorted.v4.bed"
 
 	parser = argparse.ArgumentParser(description='Extract gene_id and transcript_id from a GTF file, read the header and table of a VCF file, and intersect with a BED file.')
 	parser.add_argument('gtf_file', type=str, help='Path to the GTF file.')
