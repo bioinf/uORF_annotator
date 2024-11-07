@@ -54,10 +54,10 @@ class DataProcessor:
 		self._intersect_interorf_with_exons()
 		md5sum_uorf = hashlib.md5(self.uorf_data.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorf = hashlib.md5(self.interorf_single.to_csv(index=False).encode()).hexdigest()
-		md5sum_interorfs_bed_df = hashlib.md5(self.interorfs_bed_df.to_csv(index=False).encode()).hexdigest()
+		# md5sum_interorfs_bed_df = hashlib.md5(self.interorfs_bed_df.to_csv(index=False).encode()).hexdigest()
 		# print("md5sum:", md5sum_uorf)
 		# print("md5sum:", md5sum_interorf)
-		print("md5sum:", md5sum_interorfs_bed_df)
+		# print("md5sum:", md5sum_interorfs_bed_df)
 
 
 	def _logger_1(self):
@@ -103,16 +103,21 @@ class DataProcessor:
 		self.export_exons = source_gtf.loc[source_gtf['type'] == 'exon']
 		self.export_exons = self.export_exons.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
 		self.export_exons = self.export_exons.sort_values(by=['chr', 'start']).drop_duplicates()
-
 		self.export_exons_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
 		self.export_exons.to_csv(self.export_exons_file.name, sep='\t', header=False, index=False)
 
 	def _get_first_cds(self, source_gtf):
-		self.first_cds_df = source_gtf.loc[source_gtf['type'] == 'CDS'].sort_values(['transcript', 'strand', 'start']).groupby('transcript').apply(lambda x: x.iloc[0] if x['strand'].iloc[0] == '+' else x.iloc[-1]).reset_index(drop=True)
-		self.first_cds_df.index = self.first_cds_df['transcript']
+		cds_df = source_gtf.loc[source_gtf['type'] == 'CDS']
+		cds_df.sort_values(['transcript', 'strand', 'start'], inplace=True)
+		first_cds_df = cds_df.groupby('transcript').apply(lambda x: x.iloc[0] if x['strand'].iloc[0] == '+' else x.iloc[-1])
+		first_cds_df.reset_index(drop=True, inplace=True)
+		self.first_cds_df = first_cds_df.set_index('transcript')
+		first_cds_df_md5sum = hashlib.md5(self.first_cds_df.to_csv(index=False).encode()).hexdigest()
 
 	def _get_true_cds_start(self, tr_id):
-		return self.first_cds_df.loc[tr_id, 'start'] if tr_id in self.first_cds_df.index and self.first_cds_df.loc[tr_id, 'strand'] == '+' else self.first_cds_df.loc[tr_id, 'end'] if tr_id in self.first_cds_df.index else None
+		if tr_id in self.first_cds_df.index:
+			return self.first_cds_df.loc[tr_id, 'start'] if self.first_cds_df.loc[tr_id, 'strand'] == '+' else self.first_cds_df.loc[tr_id, 'end']
+		return None
 
 	def _extract_uorf_data(self):
 		self.uorf_data = self.data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name', 'name_and_trans']].copy()
@@ -130,9 +135,12 @@ class DataProcessor:
 		exons_norm_starts = row['exons_norm_starts']
 		exons_sizes = row['exons_sizes']
 		if row['strand'] == '+':
-			return [row['orf_start'] + eStart for eStart in exons_norm_starts], exons_norm_starts
+			exons_starts = [row['orf_start'] + eStart for eStart in exons_norm_starts]
+			return exons_starts, exons_norm_starts
 		else:
-			return [row['orf_start'] + eStart + eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)][::-1], [orf_len - eStart - eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)][::-1]
+			exons_starts = [row['orf_start'] + eStart + eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)]
+			exons_norm_starts = [orf_len - eStart - eSize for eStart, eSize in zip(exons_norm_starts, exons_sizes)]
+			return exons_starts[::-1], exons_norm_starts[::-1]
 
 	def _extract_interorf_data(self):
 		mask = ((self.uorf_data['strand'] == '+') & (self.uorf_data['orf_end'] < self.uorf_data['cds_start'])) | (self.uorf_data['cds_start'] < self.uorf_data['orf_start'])
@@ -179,5 +187,3 @@ class DataProcessor:
 
 		self.interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
 		self.interorfs_bed_df['id'] = self.interorfs_bed_df.index
-		self.interorfs_bed_df.to_csv('test2.tsv', sep='\t', header=True, index=False)
-		print(self.interorfs_bed_df.shape)
