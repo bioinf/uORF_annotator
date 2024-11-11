@@ -14,7 +14,7 @@ import hashlib
 
 class Bedtools:
 	@staticmethod
-	def intersect(file1, file2, tmp_dir='/tmp'):
+	def intersect(file1, file2):
 		bed_file1 = BedTool(file1)
 		bed_file2 = BedTool(file2)
 		intersected_bed = bed_file1.intersect(bed_file2, wo=True)
@@ -58,7 +58,6 @@ class DataProcessor:
 
 	def process_data(self):
 		self.source_gtf, self.gene_transcript = self._initial_process_gtf_file(self.gtf)
-		self._logger_0
 		self.header_lines = self._process_vcf_file(self.vcf)
 		self.source_bed_lines = self._process_bed_file(self.bed)
 		self.intersected_bed = self._intersect_vcf_and_bed(self.vcf, self.bed)
@@ -67,17 +66,21 @@ class DataProcessor:
 		self.data = self._extract_predefined_bed_anno(self.data, self.bed_4col_info_cols)
 		self.data = self._extract_distancies_from_orf_to_snp(self.data)
 		self.data = self._extract_names(self.data)
-		self._logger_1()
 		self.export_exons, self.export_exons_file = self._extract_exons_data(self.source_gtf)
-		self._logger_2()
 		self.cds_df = self._extract_cds_gtf(self.source_gtf)
 		self.first_cds_df = self._get_first_cds(self.cds_df)
 		self.uorf_data = self._extract_uorf_data(self.data)
-		self._logger_3()
 		self.interorf_single, self.tmp_interorf_single_file = self._extract_interorf_data(self.uorf_data)
-		self._logger_4()
-		self.interorfs_bed_df = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.export_exons_file)
+		self.interorfs_bed_df, self.tmp_interorfs_bed_sorted = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.export_exons_file)
 		self.exons_gtf_dict = self._extract_cds_list(self.cds_df)
+		self.uorf_dict = self._get_uorf_dict(self.fasta, self.bed)
+		self.interorfs_dict = self._get_interorfs_fasta(self.fasta, self.tmp_interorfs_bed_sorted)
+		self.cds_dict = self._extract_cds_regions(self.fasta, self.cds_df)
+		self._logger_0
+		self._logger_1()
+		self._logger_2()
+		self._logger_3()
+		self._logger_4()
 		md5sum_uorf = hashlib.md5(self.uorf_data.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorf = hashlib.md5(self.interorf_single.to_csv(index=False).encode()).hexdigest()
 		md5sum_interorfs_bed_df = hashlib.md5(self.interorfs_bed_df.to_csv(index=False).encode()).hexdigest()
@@ -86,24 +89,27 @@ class DataProcessor:
 		print("md5sum:", md5sum_interorf)
 		print("md5sum:", md5sum_interorfs_bed_df)
 		print("md5sum:", exons_gtf_dict)
-		fasta = self.get_fasta(self.fasta, self.bed)
+		md5sum = hashlib.md5(str(self.interorfs_dict).encode()).hexdigest()
+		print(md5sum)
+		md5sum = hashlib.md5(str(self.cds_dict).encode()).hexdigest()
+		print(md5sum)
 
-	def get_fasta(self, fasta, bed, strand=True):
-		fasta_df = Bedtools.getfasta(fasta, bed, strand)
-		return fasta_df
+	def _get_uorf_dict(self, fasta, bed, strand=True):
+		getfasta = Bedtools.getfasta(fasta, bed, strand)
+		uorf_dict = SeqIO.to_dict(SeqIO.parse(getfasta, "fasta"))
+		return uorf_dict
 
 	def _initial_process_gtf_file(self, gtf_path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
 		source_gtf = pd.read_csv(gtf_path, sep='\t', comment='#', header=None)
 		source_gtf.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
 		source_gtf['start'] = source_gtf['start'].astype(int) - 1
 		source_gtf['end'] = source_gtf['end'].astype(int)
-		source_gtf = source_gtf.loc[source_gtf['info'].str.contains('(NM_|ENST)\d+')]
+		source_gtf = source_gtf.loc[source_gtf['info'].str.extract('(NM_|ENST)\\d+').any(axis=1)]
 		gene_transcript = source_gtf['info'].str.extract(r'gene_id \"([^\"]+)', expand=False).to_dict()
 		source_gtf['transcript'] = source_gtf['info'].str.extract(r'transcript_id \"((NM_|ENST)\d+)', expand=False)[0]
 		return source_gtf, gene_transcript
 
 	def _process_vcf_file(self, vcf_path: str) -> List[str]:
-
 		header_lines = []
 		with open(vcf_path, 'r') as f:
 			for line in f:
@@ -144,8 +150,8 @@ class DataProcessor:
 	def get_source_bed_lines(self):
 		return self.source_bed_lines
 
-	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str, tmp_dir: str = '/tmp') -> pd.DataFrame:
-		intersected_bed = Bedtools.intersect(vcf_path, bed_path, tmp_dir)
+	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str) -> pd.DataFrame:
+		intersected_bed = Bedtools.intersect(vcf_path, bed_path)
 		# Logger.log_num_variants_in_intersection(
 		# 	int(subprocess.check_output(f"wc -l {intersected_bed.name}", shell=True).split()[0])
 		# )
@@ -277,6 +283,8 @@ class DataProcessor:
 		tmp_io_exon_isec_tab_file = Bedtools.intersect(tmp_interorf_single_file.name, export_exons_file.name)
 		tmp_io_exon_isec_tab_file.columns = ['chr', 'start', 'end', 'id', 'chr_exon', 'start_exon', 'end_exon', 'gene_info', 'score', 'strand', 'length']
 		interorfs_bed_dict = {}
+
+		sorted_lines = []
 		for _, row in tmp_io_exon_isec_tab_file.iterrows():
 			uorf_tr_id = row['id'].split('/')[1]
 			transcript_id_match = re.search(r'transcript_id\s*"([^\.]+)', row['gene_info'], re.IGNORECASE).group(1)
@@ -290,6 +298,12 @@ class DataProcessor:
 					interorfs_bed_dict[key] = {'chr': out_line[0], 'strand': out_line[-1], 'exons_sizes': [], 'exons_starts': []}
 				interorfs_bed_dict[key]['exons_sizes'].append(int(out_line[2]) - int(out_line[1]))
 				interorfs_bed_dict[key]['exons_starts'].append(int(out_line[1]) if out_line[-1] == '+' else int(out_line[2]))
+				sorted_lines.append(out_line)
+
+		tmp_interorfs_bed_sorted = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+		with open(tmp_interorfs_bed_sorted.name, 'w') as bed_file:
+			for line in sorted(sorted_lines, key=lambda x: (x[0], int(x[1]))):
+				bed_file.write('\t'.join(line) + '\n')
 
 		for k, v in interorfs_bed_dict.items():
 			if v['strand'] == '+':
@@ -306,7 +320,7 @@ class DataProcessor:
 		interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
 		interorfs_bed_df['id'] = interorfs_bed_df.index
 
-		return interorfs_bed_df
+		return interorfs_bed_df, tmp_interorfs_bed_sorted
 
 	def _extract_cds_list(self, cds_df):
 		exons_gtf_list = cds_df.values.tolist()
@@ -336,3 +350,77 @@ class DataProcessor:
 				exons_gtf_dict[k]['exons_norm_starts'] = [abs(i-starts_sorted[0]) for i in starts_sorted]
 
 		return exons_gtf_dict
+
+	def _get_interorfs_fasta(self, fasta, tmp_interorfs_bed_sorted, strand=True):
+		tmp_interorfs_fasta = Bedtools.getfasta(fasta, tmp_interorfs_bed_sorted.name, strand)
+
+		tmp_interorfs_full_seq = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+
+		seen_parts = set()
+		interorfs_full_seq = defaultdict(str)
+
+		with open(tmp_interorfs_fasta, "r") as split_fasta:
+			current_name = None
+			for line in split_fasta:
+				if line.startswith('>'):
+					record_tmp_name = line[1:].strip()
+					uorf_tmp_name = record_tmp_name.split('::')[0]
+
+					if record_tmp_name in seen_parts:
+						current_name = None
+					else:
+						seen_parts.add(record_tmp_name)
+						current_name = uorf_tmp_name
+				elif current_name:
+					if '(-)' in current_name:
+						interorfs_full_seq[current_name] = line.strip() + interorfs_full_seq[current_name]
+					else:
+						interorfs_full_seq[current_name] += line.strip()
+
+		with open(tmp_interorfs_full_seq.name, 'w') as full_fasta:
+			for uorf_name, seq in interorfs_full_seq.items():
+				full_fasta.write(f">{uorf_name}\n{seq}\n")
+
+		interorfs_dict = SeqIO.to_dict(SeqIO.parse(tmp_interorfs_full_seq.name, "fasta"))
+
+		return interorfs_dict
+
+	def _extract_cds_regions(self, fasta, cds_df):
+		cds_bed_df = cds_df[['chr', 'start', 'end', 'strand']]
+		cds_bed_df.loc[:, 'start'] = cds_bed_df['start'].astype(int, copy=False)
+		cds_bed_df.loc[:, 'end'] = cds_bed_df['end'].astype(int, copy=False)
+		cds_bed_df.loc[:, 'start'] -= 1
+		cds_bed_df = cds_bed_df.sort_values(by=['chr', 'start'])
+		cds_bed_df = cds_bed_df.drop_duplicates()
+
+		cds_bed = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+
+		cds_bed_df.to_csv(cds_bed.name, sep='\t', index=False, header=False)
+
+		getfasta = Bedtools.getfasta(fasta, cds_bed.name, strand=True)
+
+		cds_dict = SeqIO.to_dict(SeqIO.parse(getfasta, "fasta"))
+
+		return cds_dict
+
+	def _create_complete_cds(self, chrom, strand, eStarts, eSizes):
+		if chrom in ['chrM', 'chrMT', 'M', 'MT']:
+			return None
+		out_seq = ''
+		for i, j in zip(eStarts, eSizes):
+			if strand == '+':
+				out_seq += self.cds_dict[f'{chrom}:{i}-{i+j}({strand})'].seq
+			else:
+				out_seq += self.cds_dict[f'{chrom}:{i-j}-{i}({strand})'].seq
+		return out_seq
+
+	def _process_exons_gtf_dict(self, exons_gtf_dict):
+		for k in exons_gtf_dict.keys():
+			echrom = exons_gtf_dict[k]['chr']
+			estrand = exons_gtf_dict[k]['strand']
+			estarts = exons_gtf_dict[k]['exons_starts']
+			esizes = exons_gtf_dict[k]['exons_sizes']
+			exons_gtf_dict[k]['seq'] = str(self._create_complete_cds(echrom, estrand, estarts, esizes))
+		exons_gtf_df = pd.DataFrame(exons_gtf_dict).T
+		return exons_gtf_df
+
