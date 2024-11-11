@@ -4,6 +4,7 @@ from logger import Logger
 from temporary_file_manager import TemporaryFileManager
 
 from collections import defaultdict
+from pybedtools import BedTool
 import pandas as pd
 import json
 import subprocess
@@ -15,17 +16,18 @@ import hashlib
 class Bedtools:
 	@staticmethod
 	def intersect(file1, file2, tmp_dir='/tmp'):
-		bed_file = TemporaryFileManager.create('.bed', tmp_dir)
-		command = f"bedtools intersect -wo -a {file1} -b {file2}"
-		with open(bed_file.name, 'w') as w:
-			subprocess.run(command, shell=True, stdout=w)
-		num_lines = int(subprocess.check_output(f"wc -l {bed_file.name}", shell=True).split()[0])
+		bed_file1 = BedTool(file1)
+		bed_file2 = BedTool(file2)
+		intersected_bed = bed_file1.intersect(bed_file2, wo=True)
+
+		num_lines = len(intersected_bed)
 
 		Logger.log_num_variants_in_intersection(num_lines)
 
-		bed_file.register_at_exit()
+		tmp_bed_file = TemporaryFileManager.create('.bed', tmp_dir, delete_at_exit=False)
+		intersected_bed.saveas(tmp_bed_file.name)
 
-		return bed_file
+		return tmp_bed_file
 
 
 class DataProcessor:
