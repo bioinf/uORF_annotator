@@ -5,12 +5,12 @@ from temporary_file_manager import TemporaryFileManager
 
 from collections import defaultdict
 from pybedtools import BedTool
+from Bio import SeqIO
 import pandas as pd
 import json
 import re
 
 import hashlib
-
 
 class Bedtools:
 	@staticmethod
@@ -23,6 +23,13 @@ class Bedtools:
 		intersection_df = intersected_bed.to_dataframe(header=None)
 		intersection_df.columns = range(len(intersection_df.columns))
 		return intersection_df
+	
+	@staticmethod
+	def getfasta(fasta_file, bed_file, strand=True):
+		fasta = BedTool(fasta_file)
+		bed = BedTool(bed_file)
+		getfasta = bed.sequence(fi=fasta, s=strand)
+		return getfasta.seqfn
 
 
 class DataProcessor:
@@ -79,6 +86,11 @@ class DataProcessor:
 		print("md5sum:", md5sum_interorf)
 		print("md5sum:", md5sum_interorfs_bed_df)
 		print("md5sum:", exons_gtf_dict)
+		fasta = self.get_fasta(self.fasta, self.bed)
+
+	def get_fasta(self, fasta, bed, strand=True):
+		fasta_df = Bedtools.getfasta(fasta, bed, strand)
+		return fasta_df
 
 	def _initial_process_gtf_file(self, gtf_path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
 		source_gtf = pd.read_csv(gtf_path, sep='\t', comment='#', header=None)
@@ -293,6 +305,7 @@ class DataProcessor:
 
 		interorfs_bed_df = pd.DataFrame(interorfs_bed_dict).T
 		interorfs_bed_df['id'] = interorfs_bed_df.index
+
 		return interorfs_bed_df
 
 	def _extract_cds_list(self, cds_df):
