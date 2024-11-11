@@ -18,15 +18,11 @@ class Bedtools:
 		bed_file1 = BedTool(file1)
 		bed_file2 = BedTool(file2)
 		intersected_bed = bed_file1.intersect(bed_file2, wo=True)
-
 		num_lines = len(intersected_bed)
-
 		Logger.log_num_variants_in_intersection(num_lines)
-
-		tmp_bed_file = TemporaryFileManager.create('.bed', tmp_dir, delete_at_exit=False)
-		intersected_bed.saveas(tmp_bed_file.name)
-
-		return tmp_bed_file
+		intersection_df = intersected_bed.to_dataframe(header=None)
+		intersection_df.columns = range(len(intersection_df.columns))
+		return intersection_df
 
 
 class DataProcessor:
@@ -136,12 +132,12 @@ class DataProcessor:
 	def get_source_bed_lines(self):
 		return self.source_bed_lines
 
-	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str, tmp_dir: str = '/tmp') -> str:
+	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str, tmp_dir: str = '/tmp') -> pd.DataFrame:
 		intersected_bed = Bedtools.intersect(vcf_path, bed_path, tmp_dir)
 		# Logger.log_num_variants_in_intersection(
 		# 	int(subprocess.check_output(f"wc -l {intersected_bed.name}", shell=True).split()[0])
 		# )
-		return intersected_bed.name
+		return intersected_bed
 
 	def _logger_0(self):
 		Logger.log_num_rows_and_columns_in_gtf_after_processing(self.source_gtf.shape[0])
@@ -158,9 +154,8 @@ class DataProcessor:
 	def _logger_4(self):
 		Logger.log_num_records_in_table_after_annotation_processing_3(self.interorf_single.shape)
 
-	def _load_data(self, intersected_bed_path: str) -> pd.DataFrame:
-		data = pd.read_table(intersected_bed_path, header=None)
-		data = data.dropna()
+	def _load_data(self, intersected_df: pd.DataFrame) -> pd.DataFrame:
+		data = intersected_df.dropna()
 	
 		# Select and rename relevant columns
 		columns_to_keep = [0, 1, 3, 4, 7, 9, 10, 11, 13, 17, 18, 19]
@@ -268,23 +263,21 @@ class DataProcessor:
 
 	def _intersect_interorf_with_exons(self, tmp_interorf_single_file, export_exons_file):
 		tmp_io_exon_isec_tab_file = Bedtools.intersect(tmp_interorf_single_file.name, export_exons_file.name)
-
+		tmp_io_exon_isec_tab_file.columns = ['chr', 'start', 'end', 'id', 'chr_exon', 'start_exon', 'end_exon', 'gene_info', 'score', 'strand', 'length']
 		interorfs_bed_dict = {}
-		with open(tmp_io_exon_isec_tab_file.name, 'r') as isec_handle:
-			for line in isec_handle:
-				content = line.strip().split('\t')
-				uorf_tr_id = content[3].split('/')[1]
-				transcript_id_match = re.search(r'transcript_id\s*""([^\.]+)', content[7], re.IGNORECASE).group(1)
-				if uorf_tr_id == transcript_id_match:
-					rstart = max(int(content[1]), int(content[5]))
-					rend = min(int(content[2]), int(content[6]))
-					out_line = [content[0], str(rstart), str(rend), content[3], content[8], content[9]]
+		for _, row in tmp_io_exon_isec_tab_file.iterrows():
+			uorf_tr_id = row['id'].split('/')[1]
+			transcript_id_match = re.search(r'transcript_id\s*"([^\.]+)', row['gene_info'], re.IGNORECASE).group(1)
+			if uorf_tr_id == transcript_id_match:
+				rstart = max(int(row['start']), int(row['start_exon']))
+				rend = min(int(row['end']), int(row['end_exon']))
+				out_line = [row['chr'], str(rstart), str(rend), row['id'], row['score'], row['strand']]
 
-					key = out_line[3]
-					if key not in interorfs_bed_dict:
-						interorfs_bed_dict[key] = {'chr': out_line[0], 'strand': out_line[-1], 'exons_sizes': [], 'exons_starts': []}
-					interorfs_bed_dict[key]['exons_sizes'].append(int(out_line[2]) - int(out_line[1]))
-					interorfs_bed_dict[key]['exons_starts'].append(int(out_line[1]) if out_line[-1] == '+' else int(out_line[2]))
+				key = out_line[3]
+				if key not in interorfs_bed_dict:
+					interorfs_bed_dict[key] = {'chr': out_line[0], 'strand': out_line[-1], 'exons_sizes': [], 'exons_starts': []}
+				interorfs_bed_dict[key]['exons_sizes'].append(int(out_line[2]) - int(out_line[1]))
+				interorfs_bed_dict[key]['exons_starts'].append(int(out_line[1]) if out_line[-1] == '+' else int(out_line[2]))
 
 		for k, v in interorfs_bed_dict.items():
 			if v['strand'] == '+':
