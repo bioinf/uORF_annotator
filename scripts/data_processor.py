@@ -7,7 +7,6 @@ from collections import defaultdict
 from pybedtools import BedTool
 import pandas as pd
 import json
-import subprocess
 import re
 
 import hashlib
@@ -139,9 +138,9 @@ class DataProcessor:
 
 	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str, tmp_dir: str = '/tmp') -> str:
 		intersected_bed = Bedtools.intersect(vcf_path, bed_path, tmp_dir)
-		Logger.log_num_variants_in_intersection(
-			int(subprocess.check_output(f"wc -l {intersected_bed.name}", shell=True).split()[0])
-		)
+		# Logger.log_num_variants_in_intersection(
+		# 	int(subprocess.check_output(f"wc -l {intersected_bed.name}", shell=True).split()[0])
+		# )
 		return intersected_bed.name
 
 	def _logger_0(self):
