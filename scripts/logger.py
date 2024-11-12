@@ -1,32 +1,77 @@
 class Logger:
-	@staticmethod
-	def log_gene_transcript_records(num_records):
-		print(f"Number of gene-transcript records from GTF: {num_records}")
 
 	@staticmethod
-	def log_processed_bed_records(num_records):
+	def log_num_bed_lines(num_records):
 		print(f"Number of processed intervals in BED file: {num_records}")
 
 	@staticmethod
-	def log_num_variants_in_intersection(num_variants):
-		print(f"Number of variants in intersection: {num_variants}")
+	def log_num_gene_transcript_records(num_records):
+		print(f"Number of gene-transcript records from GTF: {num_records}")
 
 	@staticmethod
-	def log_num_records_in_table_after_annotation_processing_1(shape):
-		print(f"Number of rows and columns in table after annotation processing #1: {shape}")
+	def log_num_uorf_dict_records(num_records):
+		print(f"Number of uORF dictionary records: {num_records}")
 
 	@staticmethod
-	def log_num_exons_after_gtf_processing(n_rows):
-		print(f"Number of exons in BED file after GTF processing: {n_rows}")
-	
-	@staticmethod
-	def log_num_records_in_table_after_annotation_processing_2(shape):
-		print(f"Number of rows and columns in table after uORF extraction: {shape}")
+	def log_num_intersected_bed_records(num_records):
+		print(f"Number of intersected bed records: {num_records}")
 
 	@staticmethod
-	def log_num_records_in_table_after_annotation_processing_3(shape):
-		print(f"Number of rows and columns in table after interorf_single processing: {shape}")
+	def log_num_uorf_variation_data_records(num_records):
+		print(f"Number of uORF variation data records: {num_records}")
 
 	@staticmethod
-	def log_num_rows_and_columns_in_gtf_after_processing(n_rows):
-		print(f"Number of rows and columns in GTF after processing: {n_rows}")
+	def log_num_uorf_exon_bounds_records(num_records):
+		print(f"Number of uORF exon bounds records: {num_records}")
+
+	@staticmethod
+	def log_num_uorf_annotations_records(num_records):
+		print(f"Number of uORF annotations records: {num_records}")
+
+	@staticmethod
+	def log_num_uorf_snp_distances_records(num_records):
+		print(f"Number of uORF SNP distances records: {num_records}")
+
+	@staticmethod
+	def log_num_gene_info_records(num_records):
+		print(f"Number of gene info records: {num_records}")
+
+	@staticmethod
+	def log_num_exons_data_records(num_records):
+		print(f"Number of exons data records: {num_records}")
+
+	@staticmethod
+	def log_num_cds_gtf_records(num_records):
+		print(f"Number of CDS GTF records: {num_records}")
+
+	@staticmethod
+	def log_num_cds_list_records(num_records):
+		print(f"Number of CDS list records: {num_records}")
+
+	@staticmethod
+	def log_num_first_cds_records(num_records):
+		print(f"Number of first CDS records: {num_records}")
+
+	@staticmethod
+	def log_num_uorf_data_records(num_records):
+		print(f"Number of uORF data records: {num_records}")
+
+	@staticmethod
+	def log_num_interorf_single_records(num_records):
+		print(f"Number of interorf single records: {num_records}")
+
+	@staticmethod
+	def log_num_interorfs_bed_records(num_records):
+		print(f"Number of interorfs BED records: {num_records}")
+
+	@staticmethod
+	def log_num_interorfs_fasta_records(num_records):
+		print(f"Number of interorfs FASTA records: {num_records}")
+
+	@staticmethod
+	def log_num_cds_regions_records(num_records):
+		print(f"Number of CDS regions records: {num_records}")
+
+	@staticmethod
+	def log_num_exons_gtf_records(num_records):
+		print(f"Number of exons GTF records: {num_records}")

@@ -1,4 +1,4 @@
-from data_processor import DataProcessor
+from pipeline import DataProcessor
 
 import argparse
 
