@@ -16,11 +16,11 @@ class DataProcessor:
         self.bed_4col_info_cols: list[str] = self.bed_4col_info.split('|')[1:]
 
     def process_data(self) -> None:
-        self._process_raw_data()
-        self._process_uorf_data()
-        self._process_interorf_data()
+        self.process_raw_data()
+        self.process_uorf_data()
+        self.process_interorf_data()
 
-    def _process_raw_data(self) -> None:
+    def process_raw_data(self) -> None:
         self.raw_data_processor.process_data(
             self.vcf_file_path,
             self.bed_file_path,
@@ -28,13 +28,13 @@ class DataProcessor:
             self.fasta_file_path
         )
 
-    def _process_uorf_data(self) -> None:
+    def process_uorf_data(self) -> None:
         self.uorf_processor.process_data(
             self.bed_4col_info_cols, 
 			self.raw_data_processor
         )
 
-    def _process_interorf_data(self) -> None:
+    def process_interorf_data(self) -> None:
         self.interorf_processor.process_data(
             self.raw_data_processor,
 			self.uorf_processor
