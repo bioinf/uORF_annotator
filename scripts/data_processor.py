@@ -61,21 +61,24 @@ class DataProcessor:
 		self.header_lines = self._process_vcf_file(self.vcf)
 		self.source_bed_lines = self._process_bed_file(self.bed)
 		self.intersected_bed = self._intersect_vcf_and_bed(self.vcf, self.bed)
+
 		self.data = self._load_data(self.intersected_bed)
 		self.data = self._extract_exon_starts_and_sizes(self.data)
 		self.data = self._extract_predefined_bed_anno(self.data, self.bed_4col_info_cols)
 		self.data = self._extract_distancies_from_orf_to_snp(self.data)
 		self.data = self._extract_names(self.data)
+
 		self.export_exons, self.export_exons_file = self._extract_exons_data(self.source_gtf)
 		self.cds_df = self._extract_cds_gtf(self.source_gtf)
 		self.first_cds_df = self._get_first_cds(self.cds_df)
-		self.uorf_data = self._extract_uorf_data(self.data)
+		self.uorf_data = self._extract_uorf_data(self.data, self.first_cds_df)
 		self.interorf_single, self.tmp_interorf_single_file = self._extract_interorf_data(self.uorf_data)
 		self.interorfs_bed_df, self.tmp_interorfs_bed_sorted = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.export_exons_file)
 		self.exons_gtf_dict = self._extract_cds_list(self.cds_df)
 		self.uorf_dict = self._get_uorf_dict(self.fasta, self.bed)
 		self.interorfs_dict = self._get_interorfs_fasta(self.fasta, self.tmp_interorfs_bed_sorted)
 		self.cds_dict = self._extract_cds_regions(self.fasta, self.cds_df)
+	
 		self._logger_0
 		self._logger_1()
 		self._logger_2()
@@ -238,12 +241,12 @@ class DataProcessor:
 		first_cds_df = first_cds_df.set_index('transcript')
 		return first_cds_df
 
-	def _get_true_cds_start(self, tr_id):
-		if tr_id in self.first_cds_df.index:
-			return self.first_cds_df.loc[tr_id, 'start'] if self.first_cds_df.loc[tr_id, 'strand'] == '+' else self.first_cds_df.loc[tr_id, 'end']
+	def _get_true_cds_start(self, tr_id, first_cds_df):
+		if tr_id in first_cds_df.index:
+			return first_cds_df.loc[tr_id, 'start'] if first_cds_df.loc[tr_id, 'strand'] == '+' else first_cds_df.loc[tr_id, 'end']
 		return None
 
-	def _extract_uorf_data(self, data: pd.DataFrame) -> pd.DataFrame:
+	def _extract_uorf_data(self, data: pd.DataFrame, first_cds_df: pd.DataFrame) -> pd.DataFrame:
 		uorf_data = data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name', 'name_and_trans']].copy()
 		uorf_data.columns = ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_norm_starts', 'id', 'name_and_trans']
 		uorf_data = uorf_data.map(lambda x: str(x) if isinstance(x, list) else x).drop_duplicates()
@@ -252,7 +255,7 @@ class DataProcessor:
 		uorf_data[['exons_starts', 'exons_norm_starts']] = uorf_data.apply(self._process_exons, axis=1, result_type='expand')
 		uorf_data['exons_sizes'] = uorf_data.apply(lambda row: row['exons_sizes'] if row['strand'] == '+' else row['exons_sizes'][::-1], axis=1)
 		uorf_data.index = uorf_data['id']
-		uorf_data['cds_start'] = uorf_data['transcript'].apply(self._get_true_cds_start)
+		uorf_data['cds_start'] = uorf_data['transcript'].apply(lambda x: self._get_true_cds_start(x, first_cds_df))
 		return uorf_data
 
 	def _process_exons(self, row):
