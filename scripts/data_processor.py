@@ -24,18 +24,30 @@ class RawDataProcessor:
 		self.gtf_raw: pd.DataFrame = None
 
 	def process_data(self, vcf_file_path: str, bed_file_path: str, gtf_file_path: str, fasta_file_path: str) -> None:
+
 		self.vcf_file_path = vcf_file_path
 		self.bed_file_path = bed_file_path
 		self.gtf_file_path = gtf_file_path
 		self.fasta_file_path = fasta_file_path
 
-		self.vcf_header = self._process_vcf_file(self.vcf_file_path)
+		self.process_vcf_file()
+		self.process_bed_file()
+		self.process_gtf_file()
+		self.process_fasta_file()
+
+	def process_vcf_file(self) -> None:
+		self.vcf_header = self._process_vcf_header(self.vcf_file_path)
+	
+	def process_bed_file(self) -> None:
 		self.raw_bed_lines = self._process_bed_file(self.bed_file_path)
+
+	def process_gtf_file(self) -> None:
 		self.gtf_raw, self.gene_transcript = self._initial_process_gtf_file(self.gtf_file_path)
+	
+	def process_fasta_file(self) -> None:
 		self.fasta = self.fasta_file_path
 
-	
-	def _process_vcf_file(self, vcf_path: str) -> List[str]:
+	def _process_vcf_header(self, vcf_path: str) -> List[str]:
 		vcf_header = []
 		with open(vcf_path, 'r') as f:
 			for line in f:
@@ -92,13 +104,24 @@ class uORFDataProcessor:
 		self.uorf_variation_data: pd.DataFrame = None
 
 	def process_data(self, bed_4col_info_cols: List[str], raw_data_processor: RawDataProcessor) -> None:
-		self.uorf_dict = self._get_uorf_dict(raw_data_processor.fasta_file_path, raw_data_processor.bed_file_path)
-		self.intersected_bed = self._get_variation_data_from_known_uorfs(raw_data_processor.vcf_file_path, raw_data_processor.bed_file_path)
+
+		self.bed_4col_info_cols = bed_4col_info_cols
+		self.vcf_file_path = raw_data_processor.vcf_file_path
+		self.bed_file_path = raw_data_processor.bed_file_path
+		self.fasta_file_path = raw_data_processor.fasta_file_path
+		self.gene_transcript = raw_data_processor.gene_transcript
+
+		self.process_uorf_data()
+
+
+	def process_uorf_data(self) -> None:
+		self.uorf_dict = self._get_uorf_dict(self.fasta_file_path, self.bed_file_path)
+		self.intersected_bed = self._get_variation_data_from_known_uorfs(self.vcf_file_path, self.bed_file_path)
 		self.uorf_variation_data = self._prepare_uorf_variation_data(self.intersected_bed)
 		self.uorf_variation_data = self._get_uorf_exon_bounds(self.uorf_variation_data)
-		self.uorf_variation_data = self._get_uorf_annotations(self.uorf_variation_data, bed_4col_info_cols)
+		self.uorf_variation_data = self._get_uorf_annotations(self.uorf_variation_data, self.bed_4col_info_cols)
 		self.uorf_variation_data = self._calculate_uorf_snp_distances(self.uorf_variation_data)
-		self.uorf_variation_data = self._get_gene_info(self.uorf_variation_data, raw_data_processor.gene_transcript)
+		self.uorf_variation_data = self._get_gene_info(self.uorf_variation_data, self.gene_transcript)
 
 	def _get_uorf_dict(self, fasta: str, bed: str, strand: bool = True) -> Dict[str, SeqRecord]:
 		getfasta = Bedtools.getfasta(fasta, bed, strand)
@@ -175,15 +198,23 @@ class InterORFDataProcessor:
 		self.exons_gtf_df: pd.DataFrame = None
 
 	def process_data(self, raw_data_processor: RawDataProcessor, uorf_processor: uORFDataProcessor) -> None:
-		self.exons_data, self.exons_data_file = self._get_exons_data(raw_data_processor.gtf_raw)
-		self.cds_df = self._get_cds_gtf(raw_data_processor.gtf_raw)
+
+		self.gtf_raw = raw_data_processor.gtf_raw
+		self.fasta = raw_data_processor.fasta
+		self.uorf_variation_data = uorf_processor.uorf_variation_data
+		
+		self.process_interorf_data()
+
+	def process_interorf_data(self) -> None:
+		self.exons_data, self.exons_data_file = self._get_exons_data(self.gtf_raw)
+		self.cds_df = self._get_cds_gtf(self.gtf_raw)
 		self.exons_gtf_dict = self._get_cds_list(self.cds_df)
 		self.first_cds_df = self._get_first_cds(self.cds_df)
-		self.uorf_data = self._get_uorf_data(uorf_processor.uorf_variation_data, self.first_cds_df)
+		self.uorf_data = self._get_uorf_data(self.uorf_variation_data, self.first_cds_df)
 		self.interorf_single, self.tmp_interorf_single_file = self._get_interorf_data(self.uorf_data)
 		self.interorfs_bed_df, self.tmp_interorfs_bed_sorted = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.exons_data_file)
-		self.interorfs_dict = self._get_interorfs_fasta(raw_data_processor.fasta, self.tmp_interorfs_bed_sorted)
-		self.cds_dict = self._get_cds_regions(raw_data_processor.fasta, self.cds_df)
+		self.interorfs_dict = self._get_interorfs_fasta(self.fasta, self.tmp_interorfs_bed_sorted)
+		self.cds_dict = self._get_cds_regions(self.fasta, self.cds_df)
 		self.exons_gtf_df = self._process_exons_gtf_dict(self.exons_gtf_dict, self.cds_dict)
 
 	def _get_exons_data(self, gtf_raw: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
