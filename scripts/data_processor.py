@@ -43,37 +43,37 @@ class DataProcessor:
 		self.bed_4col_info = '|utid|overlapping_type|dominance_type|codon_type'
 		self.file_path = ''
 		self.bed_4col_info_cols = self.bed_4col_info.split('|')[1:]
-		self.source_bed_lines = {}
+		self.raw_bed_lines = {}
 
 
-		self.data = None
+		self.uorf_variation_data = None
 		self.first_cds_df = None
 		self.uorf_data = None
 		self.interorf_single = None
-		self.export_exons_file = None
+		self.exons_data_file = None
 		self.tmp_interorf_single_file = None
-		self.source_gtf = None
+		self.gtf_raw = None
 		self.tmp_io_exon_isec_tab_file = None
 		self.interorfs_bed_df = None
 
 	def process_data(self):
-		self.source_gtf, self.gene_transcript = self._initial_process_gtf_file(self.gtf)
-		self.header_lines = self._process_vcf_file(self.vcf)
-		self.source_bed_lines = self._process_bed_file(self.bed)
+		self.gtf_raw, self.gene_transcript = self._initial_process_gtf_file(self.gtf)
+		self.vcf_header = self._process_vcf_file(self.vcf)
+		self.raw_bed_lines = self._process_bed_file(self.bed)
 		self.intersected_bed = self._intersect_vcf_and_bed(self.vcf, self.bed)
 
-		self.data = self._load_data(self.intersected_bed)
-		self.data = self._extract_exon_starts_and_sizes(self.data)
-		self.data = self._extract_predefined_bed_anno(self.data, self.bed_4col_info_cols)
-		self.data = self._extract_distancies_from_orf_to_snp(self.data)
-		self.data = self._extract_names(self.data)
+		self.uorf_variation_data = self._load_data(self.intersected_bed)
+		self.uorf_variation_data = self._extract_uorf_exon_bounds(self.uorf_variation_data)
+		self.uorf_variation_data = self._extract_uorf_annotations(self.uorf_variation_data, self.bed_4col_info_cols)
+		self.uorf_variation_data = self._calculate_uorf_snp_distances(self.uorf_variation_data)
+		self.uorf_variation_data = self._extract_gene_info(self.uorf_variation_data)
 
-		self.export_exons, self.export_exons_file = self._extract_exons_data(self.source_gtf)
-		self.cds_df = self._extract_cds_gtf(self.source_gtf)
+		self.exons_data, self.exons_data_file = self._extract_exons_data(self.gtf_raw)
+		self.cds_df = self._extract_cds_gtf(self.gtf_raw)
 		self.first_cds_df = self._get_first_cds(self.cds_df)
-		self.uorf_data = self._extract_uorf_data(self.data, self.first_cds_df)
+		self.uorf_data = self._extract_uorf_data(self.uorf_variation_data, self.first_cds_df)
 		self.interorf_single, self.tmp_interorf_single_file = self._extract_interorf_data(self.uorf_data)
-		self.interorfs_bed_df, self.tmp_interorfs_bed_sorted = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.export_exons_file)
+		self.interorfs_bed_df, self.tmp_interorfs_bed_sorted = self._intersect_interorf_with_exons(self.tmp_interorf_single_file, self.exons_data_file)
 		self.exons_gtf_dict = self._extract_cds_list(self.cds_df)
 		self.uorf_dict = self._get_uorf_dict(self.fasta, self.bed)
 		self.interorfs_dict = self._get_interorfs_fasta(self.fasta, self.tmp_interorfs_bed_sorted)
@@ -103,28 +103,28 @@ class DataProcessor:
 		return uorf_dict
 
 	def _initial_process_gtf_file(self, gtf_path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
-		source_gtf = pd.read_csv(gtf_path, sep='\t', comment='#', header=None)
-		source_gtf.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
-		source_gtf['start'] = source_gtf['start'].astype(int) - 1
-		source_gtf['end'] = source_gtf['end'].astype(int)
-		source_gtf = source_gtf.loc[source_gtf['info'].str.extract('(NM_|ENST)\\d+').any(axis=1)]
-		gene_transcript = source_gtf['info'].str.extract(r'gene_id \"([^\"]+)', expand=False).to_dict()
-		source_gtf['transcript'] = source_gtf['info'].str.extract(r'transcript_id \"((NM_|ENST)\d+)', expand=False)[0]
-		return source_gtf, gene_transcript
+		gtf_raw = pd.read_csv(gtf_path, sep='\t', comment='#', header=None)
+		gtf_raw.columns = ['chr', 'src', 'type', 'start', 'end', 'score', 'strand', 'frame', 'info']
+		gtf_raw['start'] = gtf_raw['start'].astype(int) - 1
+		gtf_raw['end'] = gtf_raw['end'].astype(int)
+		gtf_raw = gtf_raw.loc[gtf_raw['info'].str.extract('(NM_|ENST)\\d+').any(axis=1)]
+		gene_transcript = gtf_raw['info'].str.extract(r'gene_id \"([^\"]+)', expand=False).to_dict()
+		gtf_raw['transcript'] = gtf_raw['info'].str.extract(r'transcript_id \"((NM_|ENST)\d+)', expand=False)[0]
+		return gtf_raw, gene_transcript
 
 	def _process_vcf_file(self, vcf_path: str) -> List[str]:
-		header_lines = []
+		vcf_header = []
 		with open(vcf_path, 'r') as f:
 			for line in f:
 				if line.startswith('##'):
-					header_lines.append(line.strip())
+					vcf_header.append(line.strip())
 				elif line.startswith('#CHROM'):
 					break
 		
-		return header_lines
+		return vcf_header
 
 	def _process_bed_file(self, bed_path: str) -> Dict[str, List[str]]:
-		source_bed_lines = {}
+		raw_bed_lines = {}
 		orf_count = 1
 		
 		with open(bed_path, 'r') as bed_file:
@@ -136,9 +136,9 @@ class DataProcessor:
 				uo_name = self._create_uo_name(columns, trans_id)
 				columns[3] = self._update_custom_annotation(orf_count, columns[3])
 				orf_count += 1
-				source_bed_lines[uo_name] = columns.copy()
+				raw_bed_lines[uo_name] = columns.copy()
 				
-		return source_bed_lines
+		return raw_bed_lines
 
 	def _extract_trans_id(self, column_3):
 		return re.findall('[NMENST]+_*\d+', column_3)[0]
@@ -150,8 +150,8 @@ class DataProcessor:
 		_, overlap_type, _, codon_type = column_3.split('|')
 		return f"UORF{orf_count}|{overlap_type}|{codon_type}"
 
-	def get_source_bed_lines(self):
-		return self.source_bed_lines
+	def get_raw_bed_lines(self):
+		return self.raw_bed_lines
 
 	def _intersect_vcf_and_bed(self, vcf_path: str, bed_path: str) -> pd.DataFrame:
 		intersected_bed = Bedtools.intersect(vcf_path, bed_path)
@@ -161,13 +161,13 @@ class DataProcessor:
 		return intersected_bed
 
 	def _logger_0(self):
-		Logger.log_num_rows_and_columns_in_gtf_after_processing(self.source_gtf.shape[0])
+		Logger.log_num_rows_and_columns_in_gtf_after_processing(self.gtf_raw.shape[0])
 
 	def _logger_1(self):
-		Logger.log_num_records_in_table_after_annotation_processing_1(self.data.shape)
+		Logger.log_num_records_in_table_after_annotation_processing_1(self.uorf_variation_data.shape)
 
 	def _logger_2(self):
-		Logger.log_num_exons_after_gtf_processing(self.export_exons.shape[0])
+		Logger.log_num_exons_after_gtf_processing(self.exons_data.shape[0])
 
 	def _logger_3(self):
 		Logger.log_num_records_in_table_after_annotation_processing_2(self.uorf_data.shape)
@@ -175,8 +175,8 @@ class DataProcessor:
 	def _logger_4(self):
 		Logger.log_num_records_in_table_after_annotation_processing_3(self.interorf_single.shape)
 
-	def _load_data(self, intersected_df: pd.DataFrame) -> pd.DataFrame:
-		data = intersected_df.dropna()
+	def _load_data(self, uorf_variants: pd.DataFrame) -> pd.DataFrame:
+		uorf_variation_data = uorf_variants.dropna()
 	
 		# Select and rename relevant columns
 		columns_to_keep = [0, 1, 3, 4, 7, 9, 10, 11, 13, 17, 18, 19]
@@ -187,50 +187,50 @@ class DataProcessor:
 			18: 'exons_sizes', 19: 'exons_starts'
 		}
 	
-		data = data.loc[:, columns_to_keep]
-		data = data.rename(column_names, axis=1)
+		uorf_variation_data = uorf_variation_data.loc[:, columns_to_keep]
+		uorf_variation_data = uorf_variation_data.rename(column_names, axis=1)
 	
-		return data
+		return uorf_variation_data
 
-	def _extract_exon_starts_and_sizes(self, data: pd.DataFrame) -> pd.DataFrame:
-		processed_data = data.copy()
-		processed_data['exons_starts'] = processed_data['exons_starts'].apply(
+	def _extract_uorf_exon_bounds(self, uorf_variation_data: pd.DataFrame) -> pd.DataFrame:
+		uorf_exon_bounds = uorf_variation_data.copy()
+		uorf_exon_bounds['exons_starts'] = uorf_exon_bounds['exons_starts'].apply(
 			lambda x: list(map(int, x.rstrip(',').split(',')))
 		)
-		processed_data['exons_sizes'] = processed_data['exons_sizes'].apply(
+		uorf_exon_bounds['exons_sizes'] = uorf_exon_bounds['exons_sizes'].apply(
 			lambda x: list(map(int, x.rstrip(',').split(',')))
 		)
-		return processed_data
+		return uorf_exon_bounds
 
-	def _extract_predefined_bed_anno(self, data: pd.DataFrame, bed_info_cols: List[str]) -> pd.DataFrame:
-		processed_data = data.copy()
-		bed_anno_split = processed_data['bed_anno'].str.split('|', expand=True)
-		result_data = pd.concat([processed_data, bed_anno_split], axis=1)
-		result_data.columns = list(result_data.columns[:-4]) + bed_info_cols
-		return result_data
+	def _extract_uorf_annotations(self, uorf_variation_data: pd.DataFrame, bed_annotation_columns: List[str]) -> pd.DataFrame:
+		uorf_anno = uorf_variation_data.copy()
+		bed_anno_split = uorf_anno['bed_anno'].str.split('|', expand=True)
+		uorf_info_data = pd.concat([uorf_anno, bed_anno_split], axis=1)
+		uorf_info_data.columns = list(uorf_info_data.columns[:-4]) + bed_annotation_columns
+		return uorf_info_data
 
-	def _extract_distancies_from_orf_to_snp(self, data: pd.DataFrame) -> pd.DataFrame:
-		data[['POS', 'orf_start', 'orf_end']] = data[['POS', 'orf_start', 'orf_end']].astype(int)
-		data['dist_from_orf_to_snp'] = data.apply(lambda x: x['POS'] - x['orf_start'] - 1 if x['strand'] == '+' else x['orf_end'] - x['POS'], axis=1).astype(int)
-		return data
+	def _calculate_uorf_snp_distances(self, uorf_variation_data: pd.DataFrame) -> pd.DataFrame:
+		uorf_variation_data[['POS', 'orf_start', 'orf_end']] = uorf_variation_data[['POS', 'orf_start', 'orf_end']].astype(int)
+		uorf_variation_data['dist_from_orf_to_snp'] = uorf_variation_data.apply(lambda x: x['POS'] - x['orf_start'] - 1 if x['strand'] == '+' else x['orf_end'] - x['POS'], axis=1).astype(int)
+		return uorf_variation_data
 
-	def _extract_names(self, data: pd.DataFrame) -> pd.DataFrame:
-		data['name'] = data.apply(lambda x: f"{x['#CHROM']}:{x['orf_start']}-{x['orf_end']}({x['strand']})", axis=1)
-		data['transcript'] = data.apply(lambda x: re.findall('[NMENSTX]+_*\d+', x['bed_anno'])[0], axis=1)
-		data['gene_name'] = data.apply(lambda x: self.gene_transcript.get(x['transcript'], ''), axis=1)
-		data['name_and_trans'] = data.apply(lambda x: f"{x['name']}/{x['transcript']}", axis=1)
-		return data
+	def _extract_gene_info(self, uorf_variation_data: pd.DataFrame) -> pd.DataFrame:
+		uorf_variation_data['name'] = uorf_variation_data.apply(lambda x: f"{x['#CHROM']}:{x['orf_start']}-{x['orf_end']}({x['strand']})", axis=1)
+		uorf_variation_data['transcript'] = uorf_variation_data.apply(lambda x: re.findall('[NMENSTX]+_*\d+', x['bed_anno'])[0], axis=1)
+		uorf_variation_data['gene_name'] = uorf_variation_data.apply(lambda x: self.gene_transcript.get(x['transcript'], ''), axis=1)
+		uorf_variation_data['name_and_trans'] = uorf_variation_data.apply(lambda x: f"{x['name']}/{x['transcript']}", axis=1)
+		return uorf_variation_data
 
-	def _extract_exons_data(self, source_gtf: pd.DataFrame) -> pd.DataFrame:
-		export_exons = source_gtf.loc[source_gtf['type'] == 'exon']
-		export_exons = export_exons.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
-		export_exons = export_exons.sort_values(by=['chr', 'start']).drop_duplicates()
-		export_exons_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
-		export_exons.to_csv(export_exons_file.name, sep='\t', header=False, index=False)
-		return export_exons, export_exons_file
+	def _extract_exons_data(self, gtf_raw: pd.DataFrame) -> pd.DataFrame:
+		exons_data = gtf_raw.loc[gtf_raw['type'] == 'exon']
+		exons_data = exons_data.loc[:, ['chr', 'start', 'end', 'info', 'score', 'strand']]
+		exons_data = exons_data.sort_values(by=['chr', 'start']).drop_duplicates()
+		exons_data_file = TemporaryFileManager.create('.bed', tmp_dir='/tmp')
+		exons_data.to_csv(exons_data_file.name, sep='\t', header=False, index=False)
+		return exons_data, exons_data_file
 
-	def _extract_cds_gtf(self, source_gtf):
-		cds_df = source_gtf.loc[source_gtf['type'] == 'CDS']
+	def _extract_cds_gtf(self, gtf_raw):
+		cds_df = gtf_raw.loc[gtf_raw['type'] == 'CDS']
 		cds_df = cds_df.sort_values(by=['chr', 'start']).drop_duplicates()
 		return cds_df
 
@@ -246,8 +246,8 @@ class DataProcessor:
 			return first_cds_df.loc[tr_id, 'start'] if first_cds_df.loc[tr_id, 'strand'] == '+' else first_cds_df.loc[tr_id, 'end']
 		return None
 
-	def _extract_uorf_data(self, data: pd.DataFrame, first_cds_df: pd.DataFrame) -> pd.DataFrame:
-		uorf_data = data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name', 'name_and_trans']].copy()
+	def _extract_uorf_data(self, uorf_variation_data: pd.DataFrame, first_cds_df: pd.DataFrame) -> pd.DataFrame:
+		uorf_data = uorf_variation_data.loc[:, ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_starts', 'name', 'name_and_trans']].copy()
 		uorf_data.columns = ['#CHROM', 'transcript', 'strand', 'orf_start', 'orf_end', 'exons_sizes', 'exons_norm_starts', 'id', 'name_and_trans']
 		uorf_data = uorf_data.map(lambda x: str(x) if isinstance(x, list) else x).drop_duplicates()
 		uorf_data['exons_norm_starts'] = uorf_data['exons_norm_starts'].apply(eval)
@@ -282,8 +282,8 @@ class DataProcessor:
 		return interorf_single, tmp_interorf_single_file
 
 
-	def _intersect_interorf_with_exons(self, tmp_interorf_single_file, export_exons_file):
-		tmp_io_exon_isec_tab_file = Bedtools.intersect(tmp_interorf_single_file.name, export_exons_file.name)
+	def _intersect_interorf_with_exons(self, tmp_interorf_single_file, exons_data_file):
+		tmp_io_exon_isec_tab_file = Bedtools.intersect(tmp_interorf_single_file.name, exons_data_file.name)
 		tmp_io_exon_isec_tab_file.columns = ['chr', 'start', 'end', 'id', 'chr_exon', 'start_exon', 'end_exon', 'gene_info', 'score', 'strand', 'length']
 		interorfs_bed_dict = {}
 
