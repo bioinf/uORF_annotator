@@ -200,36 +200,66 @@ class Pipeline:
         self.gtf_file = gtf_file
         self.converter = CoordinateConverter(gtf_file)
 
-    def run(self):
+    def run(self) -> pd.DataFrame:
         """
-        Runs the pipeline logic step by step.
+        Runs the pipeline logic and returns a DataFrame with results.
+        :return: DataFrame containing genomic coordinates, transcript coordinates, and verification results.
         """
         intersection = Bedtools.intersect(self.vcf_file, self.bed_file)
 
+        results = []
         for _, row in intersection.iterrows():
             chrom, pos = row[0], int(row[1])
             transcript_field = row[11]
             transcript_id = transcript_field.split('|')[0]
             
             if transcript_id not in self.converter.transcripts:
-                print(f"Warning: Transcript {transcript_id} not found in the GTF.")
+                results.append({
+                    "chrom": chrom,
+                    "pos": pos,
+                    "transcript_id": transcript_id,
+                    "transcript_coord": None,
+                    "verification_genomic_coord": None,
+                    "note": f"Warning: Transcript {transcript_id} not found in the GTF."
+                })
                 continue
                 
             # Convert genomic to transcript coordinates
             transcript_coord = self.converter.genomic_to_transcript(chrom, pos, transcript_id)
             if transcript_coord is None:
-                print(f"Warning: Position {chrom}:{pos} is not within any exon of transcript {transcript_id}")
+                results.append({
+                    "chrom": chrom,
+                    "pos": pos,
+                    "transcript_id": transcript_id,
+                    "transcript_coord": None,
+                    "verification_genomic_coord": None,
+                    "note": f"Warning: Position {chrom}:{pos} is not within any exon of transcript {transcript_id}."
+                })
                 continue
-            
-            print(f"Genomic: {chrom}:{pos}, Transcript: {transcript_id}:{transcript_coord}")
-            
+
             # Verify conversion by converting back to genomic coordinates
             back_conversion = self.converter.transcript_to_genomic(transcript_id, transcript_coord)
             if back_conversion:
                 chrom_back, pos_back = back_conversion
-                print(f"Verification - converting back: Transcript: {transcript_id}:{transcript_coord} -> Genomic: {chrom_back}:{pos_back}")
-                if pos != pos_back:
-                    print(f"Warning: Coordinate conversion mismatch! Original: {pos}, After conversion: {pos_back}")
+                note = None if pos == pos_back else f"Warning: Coordinate conversion mismatch! Original: {pos}, After conversion: {pos_back}"
+            else:
+                chrom_back, pos_back = None, None
+                note = "Warning: Back-conversion failed."
+
+            results.append({
+                "chrom": chrom,
+                "pos": pos,
+                "transcript_id": transcript_id,
+                "transcript_coord": transcript_coord,
+                "verification_genomic_coord": f"{chrom_back}:{pos_back}" if chrom_back and pos_back else None,
+                "note": note
+            })
+
+        # Convert results to a DataFrame
+        results_df = pd.DataFrame(results)
+        print(results_df)
+        return results_df
+
 
 # Example usage
 pipeline = Pipeline("data/sorted.v4.bed", "data/HGMD_resort.vcf", "data/combined_uorf_sorted.v4.gtf.gz")
