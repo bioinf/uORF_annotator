@@ -34,15 +34,18 @@ class Transcript:
         self.transcript_to_genome = {}
 
         current_transcript_pos = 0
-        for exon in self.exons:
-            for genome_pos in range(exon.genome_start, exon.genome_end + 1):
-                if self.strand == '+':
+        if self.strand == '+':
+            for exon in self.exons:
+                for genome_pos in range(exon.genome_start, exon.genome_end + 1):
                     self.genome_to_transcript[genome_pos] = current_transcript_pos
                     self.transcript_to_genome[current_transcript_pos] = genome_pos
-                else:
+                    current_transcript_pos += 1
+        else:
+            for exon in reversed(self.exons):
+                for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
                     self.genome_to_transcript[genome_pos] = current_transcript_pos
                     self.transcript_to_genome[current_transcript_pos] = genome_pos
-                current_transcript_pos += 1
+                    current_transcript_pos += 1
 
 
 class BedToolsWrapper:
