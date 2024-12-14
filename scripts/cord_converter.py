@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict
 from pybedtools import BedTool
 import gzip
-import csv
 
 
 # Configure logging
@@ -31,7 +30,6 @@ class Transcript:
 
     def _build_coordinate_maps(self):
         """Build mappings between genomic and transcript coordinates."""
-        # logger.debug(f"Building coordinate maps for transcript {self.transcript_id}")
         self.genome_to_transcript = {}
         self.transcript_to_genome = {}
 
@@ -156,18 +154,18 @@ class CoordinateConverter:
         transcript = self.transcripts.get(transcript_id)
         if not transcript:
             logger.warning(f"Transcript {transcript_id} not found")
-            return -1
+            return "NA"
 
-        return transcript.genome_to_transcript.get(genome_pos, -1)
+        return transcript.genome_to_transcript.get(genome_pos, "NA")
 
     def transcript_to_genome_pos(self, transcript_id: str, transcript_pos: int) -> int:
         """Convert transcript position to genomic position."""
         transcript = self.transcripts.get(transcript_id)
         if not transcript:
             logger.warning(f"Transcript {transcript_id} not found")
-            return -1
+            return "NA"
 
-        return transcript.transcript_to_genome.get(transcript_pos, -1)
+        return transcript.transcript_to_genome.get(transcript_pos, "NA")
 
 
 class Pipeline:
@@ -234,7 +232,7 @@ class Pipeline:
 
             transcript_pos = self.converter.genome_to_transcript_pos(transcript_id, vcf_pos)
             
-            if transcript_pos == -1:
+            if transcript_pos == "NA":
                 failed_conversions += 1
                 in_exon = self.check_position_in_exons(transcript_id, vcf_pos)
                 prev_end, next_start = self.get_nearest_exon_boundaries(transcript_id, vcf_pos)
@@ -278,12 +276,8 @@ def main():
     parser.add_argument('--vcf', required=True, help='Path to VCF file')
     parser.add_argument('--gtf', required=True, help='Path to GTF file')
     parser.add_argument('--output', required=True, help='Path to output file')
-    # parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
     args = parser.parse_args()
-
-    # if args.debug:
-    #     logger.setLevel(logging.DEBUG)
 
     try:
         logger.info("Starting pipeline...")
