@@ -12,13 +12,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class Exon:
-    start: int
-    length: int
-    genome_start: int
-    genome_end: int
-
+    def __init__(self, start: int, length: int, genome_start: int, genome_end: int):
+        self.start = start
+        self.length = length
+        # GTF coordinates are 1-based, inclusive
+        self.genome_start = genome_start  # Keep original GTF coordinates
+        self.genome_end = genome_end
 
 class Transcript:
     def __init__(self, transcript_id: str, chromosome: str, strand: str, exons: List[Exon]):
@@ -29,23 +29,37 @@ class Transcript:
         self._build_coordinate_maps()
 
     def _build_coordinate_maps(self):
-        """Build mappings between genomic and transcript coordinates."""
+        """Build mappings between genomic and transcript coordinates.
+        
+        For positive strand:
+        - Process exons in forward order
+        - Count positions from start to end of each exon
+        
+        For negative strand:
+        - Process exons in reverse order
+        - Count positions from end to start of each exon
+        - Adjust position counting to ensure correct coordinate translation
+        """
         self.genome_to_transcript = {}
         self.transcript_to_genome = {}
-
-        current_transcript_pos = 0
+        
         if self.strand == '+':
+            current_pos = 1  # Start from 1 for 1-based coordinates
             for exon in self.exons:
+                # For positive strand, process exons in order
                 for genome_pos in range(exon.genome_start, exon.genome_end + 1):
-                    self.genome_to_transcript[genome_pos] = current_transcript_pos
-                    self.transcript_to_genome[current_transcript_pos] = genome_pos
-                    current_transcript_pos += 1
-        else:
+                    self.genome_to_transcript[genome_pos] = current_pos
+                    self.transcript_to_genome[current_pos] = genome_pos
+                    current_pos += 1
+        else:  # negative strand
+            current_pos = 1
+            # For negative strand, process exons in reverse order
             for exon in reversed(self.exons):
+                # Process positions from end to start for negative strand
                 for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
-                    self.genome_to_transcript[genome_pos] = current_transcript_pos
-                    self.transcript_to_genome[current_transcript_pos] = genome_pos
-                    current_transcript_pos += 1
+                    self.genome_to_transcript[genome_pos] = current_pos
+                    self.transcript_to_genome[current_pos] = genome_pos
+                    current_pos += 1
 
 
 class BedToolsWrapper:
@@ -83,13 +97,13 @@ class CoordinateConverter:
                 return None
 
             attributes = dict(attr.strip().split(' ', 1) for attr in
-                              fields[8].rstrip(';').split('; ') if ' ' in attr)
+                            fields[8].rstrip(';').split('; ') if ' ' in attr)
             transcript_id = attributes.get('transcript_id', '').strip('"')
 
             return {
                 'chromosome': fields[0],
                 'feature': fields[2],
-                'start': int(fields[3]),
+                'start': int(fields[3]),  # GTF coordinates are 1-based
                 'end': int(fields[4]),
                 'strand': fields[6],
                 'transcript_id': transcript_id.split('.')[0]
@@ -237,16 +251,6 @@ class Pipeline:
             
             if transcript_pos == "NA":
                 failed_conversions += 1
-                in_exon = self.check_position_in_exons(transcript_id, vcf_pos)
-                prev_end, next_start = self.get_nearest_exon_boundaries(transcript_id, vcf_pos)
-                
-                logger.warning(
-                    f"Failed to convert position {vcf_pos} for transcript {transcript_id}:\n"
-                    f"  Position in exon: {in_exon}\n"
-                    f"  Nearest exon boundaries: {prev_end} - {next_start}\n"
-                    f"  VCF record: {row['chrom']}:{vcf_pos} {row['ref']} {row['alt']}\n"
-                    f"  Strand: {row['uorf_strand']}"
-                )
             
             # Convert transcript position back to genome coordinates for validation
             recovered_genome_pos = self.converter.transcript_to_genome_pos(transcript_id, transcript_pos)
