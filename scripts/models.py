@@ -1,110 +1,84 @@
-# models.py
+"""
+Models for representing genomic and transcript data structures.
+"""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Optional
+
 
 @dataclass
 class Exon:
     """
-    Representation of an exon with genomic and transcript coordinates.
+    Represents an exon with both genomic and transcript coordinates.
     
     Attributes:
-        start: Starting position in transcript coordinates
+        start: Starting position in the transcript
         length: Length of the exon
-        genome_start: Starting position in genomic coordinates (1-based)
-        genome_end: Ending position in genomic coordinates (1-based)
+        genome_start: Starting position in the genome
+        genome_end: Ending position in the genome
     """
     start: int
     length: int
     genome_start: int
     genome_end: int
 
-    def __post_init__(self):
-        """Validate exon coordinates after initialization."""
-        if self.genome_start > self.genome_end:
-            raise ValueError(f"Invalid exon coordinates: start ({self.genome_start}) > end ({self.genome_end})")
-        if self.length != (self.genome_end - self.genome_start + 1):
-            raise ValueError(f"Exon length mismatch: {self.length} != {self.genome_end - self.genome_start + 1}")
 
-@dataclass
 class Transcript:
     """
-    Representation of a transcript with its exons and coordinate mappings.
+    Represents a transcript with methods for coordinate conversion.
     
-    Attributes:
-        transcript_id: Unique identifier for the transcript
-        chromosome: Chromosome name
-        strand: Strand ('+' or '-')
-        exons: List of Exon objects
-        genome_to_transcript: Mapping from genomic to transcript coordinates
-        transcript_to_genome: Mapping from transcript to genomic coordinates
+    Handles both forward and reverse strand transcripts, maintaining
+    mappings between genomic and transcript coordinates.
     """
-    transcript_id: str
-    chromosome: str
-    strand: str
-    exons: List[Exon]
-    genome_to_transcript: Dict[int, int] = field(default_factory=dict)
-    transcript_to_genome: Dict[int, int] = field(default_factory=dict)
     
-    def __post_init__(self):
-        """Initialize transcript after creation."""
-        self._validate_strand()
-        self._sort_exons()
-        self._build_coordinate_maps()
-    
-    def _validate_strand(self):
-        """Validate strand information."""
-        if self.strand not in ['+', '-']:
-            raise ValueError(f"Invalid strand: {self.strand}. Must be '+' or '-'")
-    
-    def _sort_exons(self):
-        """Sort exons by genomic start position."""
-        self.exons = sorted(self.exons, key=lambda x: x.genome_start)
-        
-        # Check for overlapping exons
-        for i in range(len(self.exons) - 1):
-            if self.exons[i].genome_end >= self.exons[i + 1].genome_start:
-                raise ValueError(f"Overlapping exons detected in transcript {self.transcript_id}")
-    
-    def _build_coordinate_maps(self):
-        """Build mappings between genomic and transcript coordinates."""
-        self.genome_to_transcript.clear()
-        self.transcript_to_genome.clear()
-        
-        if self.strand == '+':
-            current_pos = 1  # 1-based coordinates
-            for exon in self.exons:
-                for genome_pos in range(exon.genome_start, exon.genome_end + 1):
-                    self.genome_to_transcript[genome_pos] = current_pos
-                    self.transcript_to_genome[current_pos] = genome_pos
-                    current_pos += 1
-        else:
-            current_pos = 1
-            for exon in reversed(self.exons):
-                for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
-                    self.genome_to_transcript[genome_pos] = current_pos
-                    self.transcript_to_genome[current_pos] = genome_pos
-                    current_pos += 1
-    
-    def get_exon_by_position(self, genome_pos: int) -> Optional[Exon]:
+    def __init__(self, transcript_id: str, chromosome: str, strand: str, 
+                 exons: List[Exon], mainorf_start: Optional[int] = None, 
+                 mainorf_end: Optional[int] = None):
         """
-        Find exon containing the given genomic position.
+        Initialize a transcript with its basic properties and exon structure.
         
         Args:
-            genome_pos: Genomic position
-            
-        Returns:
-            Exon object if position is in an exon, None otherwise
+            transcript_id: Unique identifier for the transcript
+            chromosome: Chromosome name/number
+            strand: DNA strand ('+' or '-')
+            exons: List of Exon objects
+            mainorf_start: Start position of main ORF (optional)
+            mainorf_end: End position of main ORF (optional)
         """
-        for exon in self.exons:
-            if exon.genome_start <= genome_pos <= exon.genome_end:
-                return exon
-        return None
-    
-    def get_total_transcript_length(self) -> int:
-        """Calculate total transcript length."""
-        return sum(exon.length for exon in self.exons)
-    
-    def is_position_in_transcript(self, genome_pos: int) -> bool:
-        """Check if a genomic position falls within the transcript."""
-        return genome_pos in self.genome_to_transcript
+        self.transcript_id = transcript_id
+        self.chromosome = chromosome
+        self.strand = strand
+        self.exons = sorted(exons, key=lambda x: x.genome_start)
+        self.mainorf_start = mainorf_start
+        self.mainorf_end = mainorf_end
+        self.genome_to_transcript = {}
+        self.transcript_to_genome = {}
+        self._build_coordinate_maps()
+
+    def _build_coordinate_maps(self) -> None:
+        """
+        Build mappings between genomic and transcript coordinates.
+        Handles both forward and reverse strand transcripts.
+        """
+        current_transcript_pos = 0
+        if self.strand == '+':
+            for exon in self.exons:
+                for genome_pos in range(exon.genome_start, exon.genome_end + 1):
+                    self._add_position_mapping(genome_pos, current_transcript_pos)
+                    current_transcript_pos += 1
+        else:
+            for exon in reversed(self.exons):
+                for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
+                    self._add_position_mapping(genome_pos, current_transcript_pos)
+                    current_transcript_pos += 1
+
+    def _add_position_mapping(self, genome_pos: int, transcript_pos: int) -> None:
+        """
+        Add a bidirectional mapping between genomic and transcript positions.
+        
+        Args:
+            genome_pos: Position in genomic coordinates
+            transcript_pos: Position in transcript coordinates
+        """
+        self.genome_to_transcript[genome_pos] = transcript_pos
+        self.transcript_to_genome[transcript_pos] = genome_pos
