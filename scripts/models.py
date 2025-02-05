@@ -55,21 +55,23 @@ class Transcript:
         self.transcript_to_genome = {}
         self._build_coordinate_maps()
 
-    def _build_coordinate_maps(self) -> None:
-        """
-        Build mappings between genomic and transcript coordinates.
-        Handles both forward and reverse strand transcripts.
-        """
+    def _build_coordinate_maps(self):
         current_transcript_pos = 0
         if self.strand == '+':
             for exon in self.exons:
+                # print(f"Processing forward strand exon: {exon.genome_start}-{exon.genome_end}")
                 for genome_pos in range(exon.genome_start, exon.genome_end + 1):
-                    self._add_position_mapping(genome_pos, current_transcript_pos)
+                    self.genome_to_transcript[genome_pos] = current_transcript_pos
+                    self.transcript_to_genome[current_transcript_pos] = genome_pos
                     current_transcript_pos += 1
         else:
+            print(f"Building coordinates for reverse strand transcript {self.transcript_id}")
             for exon in reversed(self.exons):
+                # print(f"Processing reverse strand exon: {exon.genome_start}-{exon.genome_end}")
                 for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
-                    self._add_position_mapping(genome_pos, current_transcript_pos)
+                    # print(f"Mapping genome pos {genome_pos} to transcript pos {current_transcript_pos}")
+                    self.genome_to_transcript[genome_pos] = current_transcript_pos
+                    self.transcript_to_genome[current_transcript_pos] = genome_pos
                     current_transcript_pos += 1
 
     def _add_position_mapping(self, genome_pos: int, transcript_pos: int) -> None:

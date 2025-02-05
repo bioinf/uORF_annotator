@@ -1,5 +1,3 @@
-# pipeline.py
-
 import logging
 import argparse
 import pandas as pd
@@ -11,8 +9,18 @@ from processors import VariantProcessor
 
 
 class Pipeline:
+    """Main pipeline for variant analysis and annotation."""
+    
     def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str):
-        """Initialize pipeline with input files."""
+        """
+        Initialize pipeline with input files.
+        
+        Args:
+            bed_file: Path to BED file with uORF annotations
+            vcf_file: Path to VCF file with variants
+            gtf_file: Path to GTF file with transcript annotations
+            fasta_file: Path to reference FASTA file
+        """
         self.bed_file = bed_file
         self.vcf_file = vcf_file
         self.fasta_file = fasta_file
@@ -21,7 +29,12 @@ class Pipeline:
         self.processor = VariantProcessor(self.converter, self.fasta)
 
     def process_variants(self) -> pd.DataFrame:
-        """Process and annotate variants."""
+        """
+        Process and annotate variants.
+        
+        Returns:
+            DataFrame with annotated variants
+        """
         intersected = self._intersect_files()
         if intersected.empty:
             logging.error("No intersections found between VCF and BED!")
@@ -38,10 +51,21 @@ class Pipeline:
             if result:
                 results.append(result)
 
-        return pd.DataFrame(results)
+        results_df = pd.DataFrame(results)
+        
+        # Sort results by chromosome and position
+        if not results_df.empty:
+            results_df = results_df.sort_values(['Chromosome', 'Original_Genome_Position'])
+        
+        return results_df
 
     def _intersect_files(self) -> pd.DataFrame:
-        """Intersect VCF and BED files using bedtools."""
+        """
+        Intersect VCF and BED files using bedtools.
+        
+        Returns:
+            DataFrame containing intersection results
+        """
         vcf = BedTool(self.vcf_file)
         bed = BedTool(self.bed_file)
         intersection = vcf.intersect(bed, wa=True, wb=True)
@@ -54,7 +78,7 @@ class Pipeline:
 def main():
     """Main entry point for the pipeline."""
     parser = argparse.ArgumentParser(
-        description='Annotate genomic variants and predict their impact on uORF and mainCDS'
+        description='Analyze variants in uORFs and predict their impact on main CDS'
     )
     parser.add_argument('--bed', required=True, help='Path to BED file')
     parser.add_argument('--vcf', required=True, help='Path to VCF file')
@@ -70,12 +94,18 @@ def main():
     )
 
     try:
+        logging.info("Initializing pipeline...")
         pipeline = Pipeline(args.bed, args.vcf, args.gtf, args.fasta)
+        
+        logging.info("Processing variants...")
         results = pipeline.process_variants()
         
         if not results.empty:
             results.to_csv(args.output, sep='\t', index=False)
             logging.info(f"Results successfully saved to {args.output}")
+            logging.info(f"Total variants processed: {len(results)}")
+        else:
+            logging.warning("No variants were processed successfully.")
         
     except Exception as e:
         logging.error(f"Pipeline failed: {str(e)}", exc_info=True)

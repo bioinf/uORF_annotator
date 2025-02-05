@@ -48,36 +48,93 @@ class VariantAnnotator:
     START_CODONS = {'ATG'}
     STOP_CODONS = {'TAA', 'TAG', 'TGA'}
 
-    def __init__(self, full_sequence: str):
+    def __init__(self, full_sequence: str, fasta_file):
         self.full_sequence = full_sequence
+        self.fasta = fasta_file
 
-    def _find_stop_codons(self, sequence: str, frame: int = 0) -> List[int]:
-        """Find all stop codons in given frame."""
-        stop_positions = []
-        for i in range(frame, len(sequence)-2, 3):
-            codon = sequence[i:i+3].upper()
-            if codon in self.STOP_CODONS:
-                stop_positions.append(i)
-        return stop_positions
+    def get_codon_change(self, variant_data: Dict) -> str:
+        """
+        Get codon change string for the variant.
+        
+        Args:
+            variant_data: Dictionary with variant information containing:
+                position: genomic position of variant
+                ref_allele: reference allele
+                alt_allele: alternative allele
+                uorf_start: uORF start position
+                strand: DNA strand (+ or -)
+        
+        Returns:
+            String in format "XXX>YYY" where XXX is reference codon and YYY is alternative codon,
+            or "NA" for indels/errors
+        """
+        try:
+            pos = int(variant_data['position'])
+            ref = variant_data['ref_allele']
+            alt = variant_data['alt_allele']
+            strand = variant_data['strand']
+            uorf_start = int(variant_data['uorf_start'])
+            
+            # For indels return NA
+            if len(ref) != len(alt):
+                return "NA"
+                
+            # Get position relative to uORF start to determine reading frame
+            rel_pos = pos - uorf_start  # Distance from uORF start
+            codon_number = rel_pos // 3  # Which codon (0-based)
+            pos_in_codon = rel_pos % 3   # Position within codon (0, 1, or 2)
+            
+            # Calculate codon genomic coordinates
+            codon_start = uorf_start + (codon_number * 3)
+            
+            # Get reference codon sequence
+            ref_codon = self.fasta.fetch(
+                variant_data['chromosome'],
+                codon_start,
+                codon_start + 3
+            ).upper()
+            
+            # For reverse strand, reverse complement
+            if strand == '-':
+                ref_codon = self._reverse_complement(ref_codon)
+            
+            # Create alternative codon
+            alt_codon = list(ref_codon)
+            alt_codon[pos_in_codon] = alt
+            alt_codon = ''.join(alt_codon)
+            
+            logging.debug(f"""
+                Position: {pos}
+                Relative pos: {rel_pos}
+                Codon number: {codon_number}
+                Position in codon: {pos_in_codon}
+                Reference codon: {ref_codon}
+                Alternative codon: {alt_codon}
+            """)
+            
+            return f"{ref_codon}>{alt_codon}"
+            
+        except Exception as e:
+            logging.error(f"Error getting codon change: {str(e)}")
+            return "NA"
 
-    def _get_sequence_between_features(self, start: int, end: int, strand: str) -> str:
-        """Get sequence between two genomic positions."""
-        if strand == '+':
-            return self.full_sequence[start:end]
-        else:
-            sequence = self.full_sequence[end:start]
-            return self._reverse_complement(sequence)
-
-    def _reverse_complement(self, sequence: str) -> str:
-        """Get reverse complement of sequence."""
-        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
-        return ''.join(complement.get(base, base) for base in reversed(sequence))
-
-    def _check_frame_compatibility(self, uorf_end: int, maincds_start: int) -> bool:
-        """Check if uORF and mainCDS are in the same frame."""
-        return (maincds_start - uorf_end) % 3 == 0
+    def _is_synonymous(self, ref_codon: str, alt_codon: str) -> bool:
+        """
+        Check if codon change is synonymous.
+        
+        Args:
+            ref_codon: Reference codon sequence
+            alt_codon: Alternative codon sequence
+        
+        Returns:
+            True if codons code for same amino acid
+        """
+        return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
 
     def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
+        """
+        Determine the consequence of a variant on the uORF.
+        """
         try:
             pos = int(variant_data['position'])
             ref = variant_data['ref_allele']
@@ -86,27 +143,37 @@ class VariantAnnotator:
             uorf_end = int(variant_data['uorf_end'])
             strand = variant_data['strand']
 
-            if self._affects_start_codon(pos, ref, alt, uorf_start, strand):
-                return UORFConsequence.START_LOST
-
-            if self._affects_stop_codon(pos, ref, alt, uorf_end, strand):
-                if self._creates_stop_codon(ref, alt):
-                    return UORFConsequence.STOP_GAINED
-                return UORFConsequence.STOP_LOST
-
+            # Check frameshift first
             if self._is_frameshift(ref, alt):
                 return UORFConsequence.FRAMESHIFT
 
-            if len(ref) == len(alt) == 1:
-                ref_codon = self._get_codon_at_position(pos)
-                alt_codon = self._get_altered_codon(ref_codon, pos % 3, ref, alt)
-                
+            # Get codon change
+            codon_change = self.get_codon_change(variant_data)
+            if codon_change == "NA":
+                return UORFConsequence.NON_CODING
+
+            ref_codon, alt_codon = codon_change.split('>')
+            logging.debug(f"Analyzing codon change: {ref_codon} -> {alt_codon}")
+
+            # Start codon check (first codon)
+            rel_pos = pos - uorf_start
+            if rel_pos < 3 and ref_codon in self.START_CODONS:
+                if alt_codon not in self.START_CODONS:
+                    return UORFConsequence.START_LOST
+
+            # Stop codon check (last codon)
+            dist_from_end = uorf_end - pos
+            if dist_from_end < 3:
+                if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                    return UORFConsequence.STOP_LOST
+                if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                    return UORFConsequence.STOP_GAINED
+
+            # For single nucleotide variants inside uORF
+            if len(ref) == len(alt) == 1 and uorf_start <= pos <= uorf_end:
                 if self._is_synonymous(ref_codon, alt_codon):
                     return UORFConsequence.SYNONYMOUS
                 return UORFConsequence.MISSENSE
-
-            if self._affects_splice_region(pos, uorf_start, uorf_end):
-                return UORFConsequence.SPLICE_REGION
 
             return UORFConsequence.NON_CODING
 
@@ -115,63 +182,38 @@ class VariantAnnotator:
             return None
 
     def predict_impact(self, variant_data: Dict, uorf_consequence: UORFConsequence) -> MainCDSImpact:
+        """
+        Predict the impact of a variant on the main CDS.
+        """
         try:
             uorf_start = int(variant_data['uorf_start'])
             uorf_end = int(variant_data['uorf_end'])
             maincds_start = int(variant_data['maincds_start'])
             maincds_end = int(variant_data['maincds_end'])
-            strand = variant_data['strand']
-            
-            # Simple cases first
+
+            # For missense and synonymous variants
             if uorf_consequence in [UORFConsequence.MISSENSE, UORFConsequence.SYNONYMOUS]:
                 return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
             overlaps_maincds = self.does_overlap_maincds(uorf_end, maincds_start)
 
-            # Get correct sequence for analysis
-            if strand == '+':
-                sequence = self._get_sequence_between_features(uorf_end, maincds_end, strand)
-                intervening_sequence = self._get_sequence_between_features(uorf_end, maincds_start, strand)
-            else:
-                sequence = self._get_sequence_between_features(maincds_start, uorf_start, strand)
-                intervening_sequence = self._get_sequence_between_features(maincds_end, uorf_end, strand)
-
-            if uorf_consequence == UORFConsequence.STOP_LOST:
-                stop_positions = self._find_stop_codons(sequence)
-                
-                # Check if next stop is mainCDS stop
-                if not stop_positions:
-                    return MainCDSImpact.N_TERMINAL_EXTENSION
-                    
-                first_stop = stop_positions[0]
-                if overlaps_maincds:
-                    if first_stop == (maincds_end - maincds_start):
-                        return MainCDSImpact.N_TERMINAL_EXTENSION
-                    return MainCDSImpact.OVERLAP_EXTENSION
-
-            elif uorf_consequence == UORFConsequence.FRAMESHIFT:
-                frame = (maincds_start - uorf_end) % 3 if strand == '+' else (uorf_start - maincds_end) % 3
-                stop_positions = self._find_stop_codons(intervening_sequence, frame)
-                
-                if not stop_positions:
-                    if overlaps_maincds:
-                        return MainCDSImpact.OUT_OF_FRAME_OVERLAP
-                    return MainCDSImpact.MAIN_CDS_UNAFFECTED
-                    
-                first_stop = stop_positions[0]
-                if overlaps_maincds and maincds_start <= first_stop <= maincds_end:
-                    if first_stop != (maincds_end - maincds_start):
-                        return MainCDSImpact.UORF_PRODUCT_TRUNCATION
-
-            elif uorf_consequence == UORFConsequence.START_LOST:
+            # For start loss
+            if uorf_consequence == UORFConsequence.START_LOST:
                 if overlaps_maincds:
                     return MainCDSImpact.OVERLAP_ELIMINATION
                 return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
-            elif uorf_consequence == UORFConsequence.STOP_GAINED:
+            # For stop loss
+            if uorf_consequence == UORFConsequence.STOP_LOST:
                 if overlaps_maincds:
-                    return MainCDSImpact.OVERLAP_TRUNCATION
-                return MainCDSImpact.UORF_PRODUCT_TRUNCATION
+                    return MainCDSImpact.OVERLAP_EXTENSION
+                return MainCDSImpact.MAIN_CDS_UNAFFECTED
+
+            # For frameshift
+            if uorf_consequence == UORFConsequence.FRAMESHIFT:
+                if overlaps_maincds:
+                    return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+                return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
             return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
@@ -183,33 +225,11 @@ class VariantAnnotator:
         """Check if uORF overlaps with mainCDS."""
         return uorf_end >= maincds_start
 
-    def _affects_start_codon(self, pos: int, ref: str, alt: str, uorf_start: int, strand: str) -> bool:
-        start_codon_range = range(uorf_start, uorf_start + 3)
-        return pos in start_codon_range
-
-    def _affects_stop_codon(self, pos: int, ref: str, alt: str, uorf_end: int, strand: str) -> bool:
-        stop_codon_range = range(uorf_end - 2, uorf_end + 1)
-        return pos in stop_codon_range
-
-    def _creates_stop_codon(self, ref: str, alt: str) -> bool:
-        return alt.upper() in self.STOP_CODONS
-
     def _is_frameshift(self, ref: str, alt: str) -> bool:
+        """Check if variant causes a frameshift."""
         return abs(len(ref) - len(alt)) % 3 != 0
 
-    def _get_codon_at_position(self, pos: int) -> str:
-        codon_start = pos - (pos % 3)
-        return self.full_sequence[codon_start:codon_start + 3].upper()
-
-    def _get_altered_codon(self, ref_codon: str, codon_pos: int, ref: str, alt: str) -> str:
-        return (ref_codon[:codon_pos] + alt + ref_codon[codon_pos + 1:]).upper()
-
-    def _is_synonymous(self, ref_codon: str, alt_codon: str) -> bool:
-        return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
-
-    def _affects_splice_region(self, pos: int, uorf_start: int, uorf_end: int) -> bool:
-        splice_ranges = [
-            range(uorf_start - 3, uorf_start + 3),
-            range(uorf_end - 3, uorf_end + 3)
-        ]
-        return any(pos in splice_range for splice_range in splice_ranges)
+    def _reverse_complement(self, sequence: str) -> str:
+        """Get reverse complement of sequence."""
+        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+        return ''.join(complement.get(base.upper(), base) for base in reversed(sequence))
