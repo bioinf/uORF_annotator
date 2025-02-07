@@ -135,8 +135,17 @@ class VariantProcessor:
                 
                 # Check overlap
                 overlaps_maincds = (
-                    self.annotator.does_overlap_maincds(transcript_obj.uorf_end, transcript_obj.mainorf_start)
-                    if transcript_obj.uorf_end is not None and transcript_obj.mainorf_start is not None
+                    self.annotator.does_overlap_maincds(
+                        transcript_obj.uorf_start,
+                        transcript_obj.uorf_end,
+                        transcript_obj.mainorf_start,
+                        transcript_obj.mainorf_end,
+                        strand
+                    )
+                    if (transcript_obj.uorf_start is not None and 
+                        transcript_obj.uorf_end is not None and 
+                        transcript_obj.mainorf_start is not None and 
+                        transcript_obj.mainorf_end is not None)
                     else False
                 )
                 

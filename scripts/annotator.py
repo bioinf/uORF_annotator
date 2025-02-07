@@ -232,7 +232,7 @@ class VariantAnnotator:
         """Predict the impact of a variant on the main CDS."""
         try:
             # Validate required fields
-            required_fields = ['uorf_start', 'uorf_end', 'maincds_start', 'maincds_end']
+            required_fields = ['uorf_start', 'uorf_end', 'maincds_start', 'maincds_end', 'strand']
             for field in required_fields:
                 if field not in variant_data or variant_data[field] is None:
                     logging.warning(f"Missing required field for impact prediction: {field}")
@@ -242,12 +242,13 @@ class VariantAnnotator:
             uorf_end = int(variant_data['uorf_end'])
             maincds_start = int(variant_data['maincds_start'])
             maincds_end = int(variant_data['maincds_end'])
+            strand = variant_data['strand']
 
             # For missense and synonymous variants
             if uorf_consequence in [UORFConsequence.MISSENSE, UORFConsequence.SYNONYMOUS]:
                 return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
-            overlaps_maincds = self.does_overlap_maincds(uorf_end, maincds_start)
+            overlaps_maincds = self.does_overlap_maincds(uorf_start, uorf_end, maincds_start, maincds_end, strand)
 
             # For start loss
             if uorf_consequence == UORFConsequence.START_LOST:
@@ -273,11 +274,26 @@ class VariantAnnotator:
             logging.error(f"Error predicting mainCDS impact: {str(e)}")
             return None
 
-    def does_overlap_maincds(self, uorf_end: int, maincds_start: int) -> bool:
-        """Check if uORF overlaps with mainCDS in transcript coordinates."""
-        if uorf_end is None or maincds_start is None:
+    def does_overlap_maincds(self, uorf_start: int, uorf_end: int, maincds_start: int, maincds_end: int, strand: str) -> bool:
+        """Check if uORF overlaps with mainCDS in transcript coordinates.
+        
+        Args:
+            uorf_end: End position of uORF in transcript coordinates
+            maincds_start: Start position of mainCDS in transcript coordinates
+            maincds_end: End position of mainCDS in transcript coordinates
+            strand: DNA strand ('+' or '-')
+            
+        Returns:
+            Boolean indicating if overlap exists
+        """
+        if uorf_end is None or maincds_start is None or maincds_end is None:
             return False
-        return uorf_end >= maincds_start
+        if strand == '+':
+            print(f'{strand=}, {uorf_end=}, {maincds_start=}')
+            return uorf_end >= maincds_start
+        else:  # negative strand
+            print(f'{strand=}, {uorf_start=}, {maincds_end=}')
+            return uorf_start >= maincds_end
 
     def _is_frameshift(self, ref: str, alt: str) -> bool:
         """Check if variant causes a frameshift."""
