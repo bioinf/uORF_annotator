@@ -113,7 +113,9 @@ class CoordinateConverter:
                     strand=bed_row[5],
                     exons=gtf_data['exons'][transcript_id],
                     mainorf_start=mainorf_coords[0],
-                    mainorf_end=mainorf_coords[1]
+                    mainorf_end=mainorf_coords[1],
+                    uorf_start=int(bed_row[1]) + 1,
+                    uorf_end=int(bed_row[2])
                 )
 
     def _get_mainorf_coords(self, transcript_id: str, cds_data: Dict) -> Tuple[int, int]:
