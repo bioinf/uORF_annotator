@@ -14,7 +14,7 @@ chr2	30	rs9	T	A	.	PASS	TYPE=intronic_variant;MAIN_ORF_EFF=NA
 chr2	33	rs10	C	G	.	PASS	TYPE=missense_variant;MAIN_ORF_EFF=NA
 chr2	36	rs11	G	T	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=N-terminal_extension
 chr2	43	rs12	C	T	.	PASS	TYPE=variant_in_main_ORF;MAIN_ORF_EFF=stop_gained
-chr2	113	rs13	T	C	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=overlap_extension
+chr2	114	rs13	T	C	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=overlap_extension
 chr2	144	rs14	A	T	.	PASS	TYPE=stop_gained;MAIN_ORF_EFF=overlap_truncation
 chr2	151	rs15	T	A	.	PASS	TYPE=start_lost;MAIN_ORF_EFF=overlap_elimination
 chr3	7	rs16	AA	A	.	PASS	TYPE=frameshift;MAIN_ORF_EFF=N-terminal_extension
