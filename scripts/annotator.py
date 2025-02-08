@@ -289,10 +289,8 @@ class VariantAnnotator:
         if uorf_end is None or maincds_start is None or maincds_end is None:
             return False
         if strand == '+':
-            print(f'{strand=}, {uorf_end=}, {maincds_start=}')
             return uorf_end >= maincds_start
         else:  # negative strand
-            print(f'{strand=}, {uorf_start=}, {maincds_end=}')
             return uorf_start >= maincds_end
 
     def _is_frameshift(self, ref: str, alt: str) -> bool:
