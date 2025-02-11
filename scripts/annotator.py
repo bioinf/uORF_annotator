@@ -48,207 +48,44 @@ class VariantAnnotator:
     START_CODONS = {'ATG'}
     STOP_CODONS = {'TAA', 'TAG', 'TGA'}
 
-    def __init__(self, full_sequence: str, fasta_file):
-        self.full_sequence = full_sequence
-        self.fasta = fasta_file
+    def __init__(self, transcript_sequence):
+        """
+        Initialize with TranscriptSequence object instead of raw sequence and fasta.
+        
+        Args:
+            transcript_sequence (TranscriptSequence): Object containing transcript sequence data
+        """
+        self.transcript_seq = transcript_sequence
 
-    def get_codon_change(self, variant_data: Dict) -> str:
-            """
-            Get codon change string for the variant.
-            """
-            try:
-                # Validate required fields
-                required_fields = ['position', 'ref_allele', 'alt_allele', 'uorf_start', 
-                                'uorf_end', 'strand', 'chromosome', 'genomic_start', 
-                                'genomic_end']
-                for field in required_fields:
-                    if field not in variant_data or variant_data[field] is None:
-                        logging.warning(f"Missing required field: {field}")
-                        return "NA"
-
-                pos = int(variant_data['position'])
-                ref = variant_data['ref_allele']
-                alt = variant_data['alt_allele']
-                strand = variant_data['strand']
-                uorf_start = int(variant_data['uorf_start'])
-                uorf_end = int(variant_data['uorf_end'])
-                chromosome = variant_data['chromosome']
-                genomic_start = int(variant_data['genomic_start'])
-                genomic_end = int(variant_data['genomic_end'])
-                
-                if len(ref) != len(alt):
-                    return "NA"
-                    
-                if strand == '+':
-                    rel_pos = pos - uorf_start
-                    codon_number = rel_pos // 3
-                    pos_in_codon = rel_pos % 3
-                    
-                    codon_start = genomic_start + (codon_number * 3)
-                    
-                    try:
-                        ref_codon = self.fasta.fetch(
-                            chromosome,
-                            codon_start,
-                            codon_start + 3
-                        ).upper()
-                    except Exception as e:
-                        logging.error(f"Error fetching reference codon: {str(e)}")
-                        return "NA"
-                        
-                    alt_codon = list(ref_codon)
-                    alt_codon[pos_in_codon] = alt
-                    alt_codon = ''.join(alt_codon)
-                    
-                else:  # negative strand
-                    rel_pos = pos - uorf_end
-                    codon_number = abs(rel_pos) // 3
-                    pos_in_codon = abs(rel_pos) % 3
-                    
-                    codon_end = genomic_end - (codon_number * 3)
-                    
-                    try:
-                        ref_codon = self.fasta.fetch(
-                            chromosome,
-                            codon_end - 3,
-                            codon_end
-                        ).upper()
-                    except Exception as e:
-                        logging.error(f"Error fetching reference codon: {str(e)}")
-                        return "NA"
-
-                    # Reverse position in codon for negative strand
-                    pos_in_codon = 2 - pos_in_codon
-                    
-                    # Make change in codon
-                    alt_codon = list(ref_codon)
-                    alt_codon[pos_in_codon] = alt
-                    alt_codon = ''.join(alt_codon)
-                    
-                    # Reverse both codons
-                    ref_codon = self._reverse_complement(ref_codon)
-                    alt_codon = self._reverse_complement(alt_codon)
-
-                logging.debug(f"""
-                    Strand: {strand}
-                    Position: {pos}
-                    Relative pos: {rel_pos}
-                    Codon number: {codon_number}
-                    Position in codon: {pos_in_codon}
-                    Reference codon: {ref_codon}
-                    Alternative codon: {alt_codon}
-                """)
-                
-                return f"{ref_codon}>{alt_codon}"
-                
-            except Exception as e:
-                logging.error(f"Error getting codon change: {str(e)}")
-                return "NA"
-
-    def _is_synonymous(self, ref_codon: str, alt_codon: str) -> bool:
-        return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
-
-    def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
-            """
-            Determine the consequence of a variant on the uORF.
-            """
-            try:
-                # Validate required fields
-                required_fields = ['position', 'ref_allele', 'alt_allele', 'uorf_start', 
-                                'uorf_end', 'strand']
-                for field in required_fields:
-                    if field not in variant_data or variant_data[field] is None:
-                        logging.warning(f"Missing required field for consequence analysis: {field}")
-                        return None
-
-                pos = int(variant_data['position'])
-                ref = variant_data['ref_allele']
-                alt = variant_data['alt_allele']
-                uorf_start = int(variant_data['uorf_start'])
-                uorf_end = int(variant_data['uorf_end'])
-                strand = variant_data['strand']
-
-                # Basic position validation
-                if pos < min(uorf_start, uorf_end) or pos > max(uorf_start, uorf_end):
-                    logging.warning(f"Position {pos} is outside uORF region ({uorf_start}-{uorf_end})")
-                    return UORFConsequence.NON_CODING
-
-                # Check frameshift first
-                if self._is_frameshift(ref, alt):
-                    return UORFConsequence.FRAMESHIFT
-
-                # Get codon change
-                codon_change = self.get_codon_change(variant_data)
-                if codon_change == "NA":
-                    return UORFConsequence.NON_CODING
-
-                ref_codon, alt_codon = codon_change.split('>')
-                logging.debug(f"Analyzing codon change: {ref_codon} -> {alt_codon}")
-
-                if strand == '+':
-                    # Start codon check (first codon)
-                    rel_pos = pos - uorf_start
-                    if rel_pos < 3 and ref_codon in self.START_CODONS:
-                        if alt_codon not in self.START_CODONS:
-                            return UORFConsequence.START_LOST
-
-                    # Stop codon check (last codon)
-                    dist_from_end = uorf_end - pos
-                    if dist_from_end < 3:
-                        if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
-                            return UORFConsequence.STOP_LOST
-                        if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
-                            return UORFConsequence.STOP_GAINED
-                else:
-                    # For negative strand
-                    # Start codon check (near uorf_end in transcript coordinates)
-                    dist_from_start = abs(pos - uorf_end)
-                    if dist_from_start < 3 and ref_codon in self.START_CODONS:
-                        if alt_codon not in self.START_CODONS:
-                            return UORFConsequence.START_LOST
-
-                    # Stop codon check (near uorf_start in transcript coordinates)
-                    dist_from_end = abs(pos - uorf_start)
-                    if dist_from_end < 3:
-                        # Stop codon check
-                        if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
-                            return UORFConsequence.STOP_LOST
-                        if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
-                            return UORFConsequence.STOP_GAINED
-
-                # For single nucleotide variants inside uORF
-                if len(ref) == len(alt) == 1:
-                    if self._is_synonymous(ref_codon, alt_codon):
-                        return UORFConsequence.SYNONYMOUS
-                    return UORFConsequence.MISSENSE
-
-                return UORFConsequence.NON_CODING
-
-            except Exception as e:
-                logging.error(f"Error determining consequence: {str(e)}")
-                return None
+    def does_overlap_maincds(self, transcript_strand: str, uorf_start_genomic: int, uorf_end_genomic: int, 
+                        maincds_start_genomic: int, maincds_end_genomic: int) -> bool:
+        """
+        Check if uORF overlaps with mainCDS in genomic coordinates.
+        For + strand, checks if uORF end is after mainCDS start.
+        For - strand, checks if uORF start is before mainCDS end.
+        """
+        if uorf_start_genomic is None or uorf_end_genomic is None or maincds_start_genomic is None or maincds_end_genomic is None:
+            return False
+            
+        if transcript_strand == '+':
+            return uorf_end_genomic >= maincds_start_genomic
+        else:  # strand == '-'
+            return uorf_start_genomic <= maincds_end_genomic
 
     def predict_impact(self, variant_data: Dict, uorf_consequence: UORFConsequence) -> Optional[MainCDSImpact]:
         """Predict the impact of a variant on the main CDS."""
         try:
-            # Validate required fields
-            required_fields = ['uorf_start', 'uorf_end', 'maincds_start', 'maincds_end', 'strand']
-            for field in required_fields:
-                if field not in variant_data or variant_data[field] is None:
-                    logging.warning(f"Missing required field for impact prediction: {field}")
-                    return None
-
-            uorf_start = int(variant_data['uorf_start'])
-            uorf_end = int(variant_data['uorf_end'])
-            maincds_start = int(variant_data['maincds_start'])
-            maincds_end = int(variant_data['maincds_end'])
-            strand = variant_data['strand']
-
             # For missense and synonymous variants
             if uorf_consequence in [UORFConsequence.MISSENSE, UORFConsequence.SYNONYMOUS]:
                 return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
-            overlaps_maincds = self.does_overlap_maincds(uorf_start, uorf_end, maincds_start, maincds_end, strand)
+            required_fields = ['overlaps_maincds']
+            for field in required_fields:
+                if field not in variant_data:
+                    logging.warning(f"Missing required field for impact prediction: {field}")
+                    return None
+
+            overlaps_maincds = variant_data['overlaps_maincds']
 
             # For start loss
             if uorf_consequence == UORFConsequence.START_LOST:
@@ -274,34 +111,105 @@ class VariantAnnotator:
             logging.error(f"Error predicting mainCDS impact: {str(e)}")
             return None
 
-    def does_overlap_maincds(self, uorf_start: int, uorf_end: int, maincds_start: int, maincds_end: int, strand: str) -> bool:
-        """Check if uORF overlaps with mainCDS in transcript coordinates.
-        
-        Args:
-            uorf_end: End position of uORF in transcript coordinates
-            maincds_start: Start position of mainCDS in transcript coordinates
-            maincds_end: End position of mainCDS in transcript coordinates
-            strand: DNA strand ('+' or '-')
-            
-        Returns:
-            Boolean indicating if overlap exists
-        """
-        if uorf_end is None or maincds_start is None or maincds_end is None:
-            return False
-        if strand == '+':
-            return uorf_end >= maincds_start
-        else:  # negative strand
-            return uorf_start >= maincds_end
+    def get_codon_change(self, variant_data: Dict) -> str:
+        """Get codon change string for the variant."""
+        try:
+            required_fields = ['position', 'ref_allele', 'alt_allele']
+            for field in required_fields:
+                if field not in variant_data or variant_data[field] is None:
+                    return "NA"
+
+            pos = int(variant_data['position'])
+            ref = variant_data['ref_allele']
+            alt = variant_data['alt_allele']
+
+            if len(ref) != len(alt):
+                return "NA"
+
+            # Get reference codon using TranscriptSequence logic
+            ref_codon = self.transcript_seq.get_codon_at_position(pos)
+            if not ref_codon:
+                return "NA"
+                
+            # Calculate relative position using same logic as in TranscriptSequence
+            if self.transcript_seq.transcript.strand == '+':
+                rel_pos = pos - self.transcript_seq.transcript.uorf_start
+            else:
+                rel_pos = abs(pos - self.transcript_seq.transcript.uorf_end)
+                
+            # Calculate position within codon
+            pos_in_codon = rel_pos % 3
+
+            # Create alternate codon
+            alt_codon = list(ref_codon)
+            if self.transcript_seq.transcript.strand == '-':
+                alt = self._reverse_complement(alt)
+            alt_codon[pos_in_codon] = alt
+            alt_codon = ''.join(alt_codon)
+
+            return f"{ref_codon}>{alt_codon}"
+
+        except Exception as e:
+            logging.error(f"Error getting codon change: {str(e)}")
+            return "NA"
+
+
+    @staticmethod
+    def _reverse_complement(sequence):
+        """Get reverse complement of sequence."""
+        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 
+                    'N': 'N', 'n': 'n'}
+        return ''.join(complement.get(base.upper(), base) 
+                    for base in reversed(sequence))
+
+    def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
+        """Determine the consequence of a variant on the uORF."""
+        try:
+            required_fields = ['position', 'ref_allele', 'alt_allele', 'codon_change']
+            for field in required_fields:
+                if field not in variant_data or variant_data[field] is None:
+                    return None
+
+            ref = variant_data['ref_allele']
+            alt = variant_data['alt_allele']
+
+            if self._is_frameshift(ref, alt):
+                return UORFConsequence.FRAMESHIFT
+
+            # Use pre-calculated codon change
+            codon_change = variant_data['codon_change']
+            if codon_change == "NA":
+                return UORFConsequence.NON_CODING
+
+            ref_codon, alt_codon = codon_change.split('>')
+
+            # Check start codon effect
+            if ref_codon in self.START_CODONS:
+                if alt_codon not in self.START_CODONS:
+                    return UORFConsequence.START_LOST
+
+            # Check stop codon effect
+            if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                return UORFConsequence.STOP_LOST
+            if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                return UORFConsequence.STOP_GAINED
+
+            # For single nucleotide variants inside uORF
+            if len(ref) == len(alt) == 1:
+                if self._is_synonymous(ref_codon, alt_codon):
+                    return UORFConsequence.SYNONYMOUS
+                return UORFConsequence.MISSENSE
+
+            return UORFConsequence.NON_CODING
+
+        except Exception as e:
+            logging.error(f"Error determining consequence: {str(e)}")
+            return None
 
     def _is_frameshift(self, ref: str, alt: str) -> bool:
         """Check if variant causes a frameshift."""
         return abs(len(ref) - len(alt)) % 3 != 0
 
-    def _reverse_only(self, sequence: str) -> str:
-        """Get reverse of sequence without complementing."""
-        return sequence[::-1]
-
-    def _reverse_complement(self, sequence: str) -> str:
-        """Get reverse complement of sequence."""
-        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
-        return ''.join(complement.get(base.upper(), base) for base in reversed(sequence))
+    def _is_synonymous(self, ref_codon: str, alt_codon: str) -> bool:
+        """Check if amino acid change is synonymous."""
+        return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
