@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Callable, List
 from enum import Enum
 
 class UORFConsequence(Enum):
@@ -53,6 +53,26 @@ class VariantAnnotator:
             transcript_sequence (TranscriptSequence): Object containing transcript sequence data
         """
         self.transcript_seq = transcript_sequence
+        self._initialize_impact_rules()
+
+    def _initialize_impact_rules(self):
+        """
+        Initialize the rule-based system for impact prediction.
+        
+        This method sets up the handlers for each consequence type and their order.
+        New impact types and rules can be added here in the future.
+        """
+        # Dictionary mapping consequence types to handler functions
+        self.impact_handlers = {
+            UORFConsequence.MISSENSE: self._handle_missense_synonymous,
+            UORFConsequence.SYNONYMOUS: self._handle_missense_synonymous,
+            UORFConsequence.START_LOST: self._handle_start_lost,
+            UORFConsequence.STOP_LOST: self._handle_stop_lost,
+            UORFConsequence.FRAMESHIFT: self._handle_frameshift,
+            UORFConsequence.STOP_GAINED: self._handle_stop_gained,
+            UORFConsequence.SPLICE_REGION: self._handle_splice_region,
+            UORFConsequence.NON_CODING: self._handle_non_coding
+        }
 
     def does_overlap_maincds(self, uorf_end, maincds_start) -> bool:
         """
@@ -91,68 +111,148 @@ class VariantAnnotator:
                     logging.warning(f"Missing required field for impact prediction: {field}")
                     return None
 
-            position = variant_data['position']
-            uorf_start = variant_data['uorf_start']
-            uorf_end = variant_data['uorf_end']
-            maincds_start = variant_data['maincds_start']
-            maincds_end = variant_data['maincds_end']
+            # Use the appropriate handler for this consequence type
+            if uorf_consequence in self.impact_handlers:
+                return self.impact_handlers[uorf_consequence](variant_data)
             
-            # For missense and synonymous variants
-            if uorf_consequence in [UORFConsequence.MISSENSE, UORFConsequence.SYNONYMOUS]:
-                return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
-            # Check if uORF originally overlaps with mainCDS
-            overlaps_maincds = self.does_overlap_maincds(uorf_end, maincds_start)
-
-            # For start loss
-            if uorf_consequence == UORFConsequence.START_LOST:
-                if overlaps_maincds:
-                    return MainCDSImpact.OVERLAP_ELIMINATION
-                return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
-            # For non-overlapping uORFs with consequences that could extend beyond original uORF end
-            if not overlaps_maincds and uorf_consequence in [UORFConsequence.STOP_LOST, UORFConsequence.FRAMESHIFT]:
-                # Calculate the new stop codon position
-                new_stop_pos = self._find_new_stop_codon_position(
-                    variant_data, uorf_consequence
-                )
-                
-                if new_stop_pos is None:
-                    return MainCDSImpact.MAIN_CDS_UNAFFECTED
-                
-                # Check if new stop position extends into main CDS region
-                extends_to_maincds = new_stop_pos >= maincds_start
-                matches_maincds_end = new_stop_pos == maincds_end
-                within_maincds = maincds_start <= new_stop_pos < maincds_end
-                
-                if extends_to_maincds:
-                    # If new stop coincides with mainCDS stop codon
-                    if matches_maincds_end:
-                        return MainCDSImpact.N_TERMINAL_EXTENSION
-                    # If new stop is somewhere in the main CDS region
-                    elif within_maincds:
-                        return MainCDSImpact.OUT_OF_FRAME_OVERLAP
-                
-                return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
-            # For stop loss with original overlap
-            if uorf_consequence == UORFConsequence.STOP_LOST:
-                if overlaps_maincds:
-                    return MainCDSImpact.OVERLAP_EXTENSION
-                return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
-            # For frameshift with original overlap
-            if uorf_consequence == UORFConsequence.FRAMESHIFT:
-                if overlaps_maincds:
-                    return MainCDSImpact.OUT_OF_FRAME_OVERLAP
-                return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
             # Default case
             return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
         except Exception as e:
             logging.error(f"Error predicting mainCDS impact: {str(e)}")
             return None
+
+    def _handle_missense_synonymous(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle missense and synonymous variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
+
+    def _handle_start_lost(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle start-loss variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        overlaps_maincds = self.does_overlap_maincds(
+            variant_data['uorf_end'], variant_data['maincds_start']
+        )
+        
+        if overlaps_maincds:
+            return MainCDSImpact.OVERLAP_ELIMINATION
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
+
+    def _handle_stop_lost(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle stop-loss variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        overlaps_maincds = self.does_overlap_maincds(
+            variant_data['uorf_end'], variant_data['maincds_start']
+        )
+        
+        if overlaps_maincds:
+            return MainCDSImpact.OVERLAP_EXTENSION
+        
+        new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.STOP_LOST)
+        if new_stop_pos is None:
+            return MainCDSImpact.MAIN_CDS_UNAFFECTED
+            
+        # If new stop position is before mainCDS start, it's a truncation
+        if new_stop_pos < variant_data['maincds_start']:
+            return MainCDSImpact.UORF_PRODUCT_TRUNCATION
+        
+        # Check if uORF end is adjacent to mainCDS start
+        if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
+            return MainCDSImpact.N_TERMINAL_EXTENSION
+            
+        # Otherwise it's an out-of-frame overlap
+        return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+
+    def _handle_frameshift(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle frameshift variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        overlaps_maincds = self.does_overlap_maincds(
+            variant_data['uorf_end'], variant_data['maincds_start']
+        )
+        
+        if overlaps_maincds:
+            return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+        
+        new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.FRAMESHIFT)
+        if new_stop_pos is None:
+            return MainCDSImpact.MAIN_CDS_UNAFFECTED
+            
+        # If new stop position is before mainCDS start, it's a truncation
+        if new_stop_pos < variant_data['maincds_start']:
+            return MainCDSImpact.UORF_PRODUCT_TRUNCATION
+            
+        # If new stop exactly matches mainCDS end, it's an N-terminal extension
+        if new_stop_pos == variant_data['maincds_end']:
+            return MainCDSImpact.N_TERMINAL_EXTENSION
+            
+        # Otherwise it's an out-of-frame overlap
+        return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+
+    def _handle_stop_gained(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle stop-gain variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        # Currently, stop gain in uORF doesn't affect mainCDS
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
+
+    def _handle_splice_region(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle splice region variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        # Currently, splice region variants in uORF don't affect mainCDS
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
+
+    def _handle_non_coding(self, variant_data: Dict) -> MainCDSImpact:
+        """
+        Handle non-coding variants.
+        
+        Args:
+            variant_data: Variant data dictionary
+            
+        Returns:
+            Main CDS impact classification
+        """
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _find_new_stop_codon_position(self, variant_data: Dict, 
                                      uorf_consequence: UORFConsequence) -> Optional[int]:
@@ -170,6 +270,7 @@ class VariantAnnotator:
             transcript_pos = variant_data['position']
             uorf_start = variant_data['uorf_start']
             uorf_end = variant_data['uorf_end']
+            maincds_end = variant_data.get('maincds_end')
             
             # Determine where to start scanning for a new stop codon
             if uorf_consequence == UORFConsequence.STOP_LOST:
@@ -196,7 +297,8 @@ class VariantAnnotator:
                 if not ref_allele or not alt_allele:
                     return None
                     
-                shift_amount = abs(len(alt_allele) - len(ref_allele)) % 3
+                # Use actual length difference for frame calculation
+                shift_amount = (len(alt_allele) - len(ref_allele)) % 3
                 if shift_amount == 0:  # No real frameshift effect
                     return None
                     
@@ -206,8 +308,11 @@ class VariantAnnotator:
             # Find the next in-frame stop codon
             new_stop_pos = self._find_next_stop_codon(sequence, frame)
             if new_stop_pos is None:
+                # If no stop codon found, use mainCDS end as approximation
+                if maincds_end is not None:
+                    return maincds_end
                 return None
-                
+                    
             # Convert relative position to transcript position
             return scan_start_pos + new_stop_pos
             
