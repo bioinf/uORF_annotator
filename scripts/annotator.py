@@ -181,6 +181,9 @@ class VariantAnnotator:
                 
             if new_stop_pos > variant_data['uorf_end']:
                 return MainCDSImpact.OVERLAP_EXTENSION
+            elif new_stop_pos < variant_data['maincds_start']:
+                # If new stop is before mainCDS start, it eliminates the overlap
+                return MainCDSImpact.OVERLAP_ELIMINATION
             else:
                 # This is unusual for a stop loss, but could happen in complex variants
                 return MainCDSImpact.OVERLAP_TRUNCATION
@@ -246,8 +249,8 @@ class VariantAnnotator:
             elif new_stop_pos > original_stop:
                 return MainCDSImpact.OVERLAP_EXTENSION
             else:
-                # Same stop position but different frame - treat as out of frame
-                return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+                # Same exact position but with a frameshift - should be treated as extension
+                return MainCDSImpact.OVERLAP_EXTENSION
         
         # For non-overlapping uORFs
         maincds_start = variant_data['maincds_start']
