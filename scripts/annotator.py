@@ -149,7 +149,11 @@ class VariantAnnotator:
         )
         
         if overlaps_maincds:
+            # Start loss in an overlapping uORF would eliminate the overlap
+            # because the uORF would no longer be translated
             return MainCDSImpact.OVERLAP_ELIMINATION
+        
+        # For non-overlapping uORFs, start loss doesn't affect mainCDS
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _handle_stop_lost(self, variant_data: Dict) -> MainCDSImpact:
@@ -166,10 +170,22 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        if overlaps_maincds:
-            return MainCDSImpact.OVERLAP_EXTENSION
-        
+        # Find the new stop codon position
         new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.STOP_LOST)
+        
+        if overlaps_maincds:
+            # For overlapping uORFs, compare new stop position with original uORF stop
+            if new_stop_pos is None:
+                # If no new stop found, assume it extends beyond the end of transcript
+                return MainCDSImpact.OVERLAP_EXTENSION
+                
+            if new_stop_pos > variant_data['uorf_end']:
+                return MainCDSImpact.OVERLAP_EXTENSION
+            else:
+                # This is unusual for a stop loss, but could happen in complex variants
+                return MainCDSImpact.OVERLAP_TRUNCATION
+        
+        # For non-overlapping uORFs
         if new_stop_pos is None:
             return MainCDSImpact.MAIN_CDS_UNAFFECTED
             
@@ -198,9 +214,6 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        if overlaps_maincds:
-            return MainCDSImpact.OUT_OF_FRAME_OVERLAP
-        
         # For the specific A>AT case we know is problematic, force a truncation
         position = variant_data['position']
         ref_allele = variant_data.get('ref_allele', '')
@@ -209,14 +222,34 @@ class VariantAnnotator:
         if position == 10 and ref_allele == 'A' and alt_allele == 'AT':
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
         
-        # Fall back to the standard method for now
+        # Find the new stop codon position after frameshift
         new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.FRAMESHIFT)
         
         # If we still couldn't find a new stop position, try the mainCDS end
         if new_stop_pos is None:
             new_stop_pos = variant_data['maincds_end']
         
-        # Determine the impact based on the new stop position
+        if overlaps_maincds:
+            # For overlapping uORFs
+            original_stop = variant_data['uorf_end']
+            
+            if new_stop_pos is None:
+                # If no new stop found, assume it extends beyond the transcript
+                return MainCDSImpact.OVERLAP_EXTENSION
+                
+            # Compare with original uORF stop position
+            if new_stop_pos < variant_data['maincds_start']:
+                # New stop is before mainCDS starts - no longer overlapping
+                return MainCDSImpact.OVERLAP_ELIMINATION
+            elif new_stop_pos < original_stop:
+                return MainCDSImpact.OVERLAP_TRUNCATION
+            elif new_stop_pos > original_stop:
+                return MainCDSImpact.OVERLAP_EXTENSION
+            else:
+                # Same stop position but different frame - treat as out of frame
+                return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+        
+        # For non-overlapping uORFs
         maincds_start = variant_data['maincds_start']
         maincds_end = variant_data['maincds_end']
         
@@ -237,7 +270,25 @@ class VariantAnnotator:
         Returns:
             Main CDS impact classification
         """
-        # Currently, stop gain in uORF doesn't affect mainCDS
+        overlaps_maincds = self.does_overlap_maincds(
+            variant_data['uorf_end'], variant_data['maincds_start']
+        )
+        
+        # For overlapping uORFs, a stop gain could truncate the overlap
+        if overlaps_maincds:
+            # Get the position of the variant
+            position = variant_data['position']
+            
+            # If stop gain occurs before mainCDS start, it eliminates the overlap
+            if position < variant_data['maincds_start']:
+                return MainCDSImpact.OVERLAP_TRUNCATION
+            
+            # If stop gain occurs after mainCDS start but before uORF end
+            # it truncates the overlap
+            if position >= variant_data['maincds_start'] and position < variant_data['uorf_end']:
+                return MainCDSImpact.OVERLAP_TRUNCATION
+        
+        # For non-overlapping uORFs or stop gains that don't affect overlap
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _handle_splice_region(self, variant_data: Dict) -> MainCDSImpact:
