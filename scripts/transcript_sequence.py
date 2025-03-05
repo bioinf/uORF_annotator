@@ -1,4 +1,8 @@
+"""
+Module for handling transcript sequences and uORF extraction.
+"""
 import logging
+from typing import Optional
 
 class TranscriptSequence:
     def __init__(self, transcript_obj, fasta, chromosome):
@@ -69,10 +73,11 @@ class TranscriptSequence:
         if self.transcript.mainorf_start is not None and self.transcript.mainorf_start < 1:
             logging.warning(f"Invalid mainORF start position {self.transcript.mainorf_start} for {self.transcript.transcript_id}, setting to 1")
             self.transcript.mainorf_start = 1
-        
+
     def _extract_transcript_sequence(self, fasta):
         """
         Extract full transcript sequence in 5' to 3' orientation.
+        Also handle cases where transcript has been extended to include uORF.
         
         Args:
             fasta: FastaFile object for sequence extraction
@@ -80,34 +85,100 @@ class TranscriptSequence:
         Returns:
             Complete transcript sequence from 5' to 3'
         """
+        import logging
         transcript_seq = ""
         
         try:
+            was_extended = getattr(self.transcript, 'was_extended', False)
+            
+            print(f"\nExtracting sequence for transcript {self.transcript.transcript_id}")
+            print(f"Was transcript extended: {was_extended}")
+            
+            # Check for uORF coordinates outside of transcript
+            if was_extended:
+                print(f"Using extended boundaries for transcript {self.transcript.transcript_id}")
+                
+                # For extended transcripts, we need to consider the entire range
+                # between the minimum and maximum genomic positions in our coordinate maps
+                min_genomic_pos = min(self.transcript.genome_to_transcript.keys())
+                max_genomic_pos = max(self.transcript.genome_to_transcript.keys())
+                
+                print(f"Extended genomic range: {min_genomic_pos}-{max_genomic_pos}")
+                
+                # Extract the entire region for extended transcript
+                if self.transcript.strand == '+':
+                    fetch_start = min_genomic_pos - 1  # Convert to 0-based
+                    fetch_end = max_genomic_pos
+                    
+                    print(f"Fetching sequence for positive strand: {fetch_start}-{fetch_end}")
+                    try:
+                        full_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
+                        print(f"Successfully fetched sequence, length: {len(full_seq)}")
+                        if len(full_seq) > 50:
+                            print(f"Sequence preview: {full_seq[:25]}...{full_seq[-25:]}")
+                        else:
+                            print(f"Sequence: {full_seq}")
+                        return full_seq
+                    except Exception as e:
+                        print(f"ERROR fetching sequence: {str(e)}")
+                        logging.error(f"Error fetching sequence: {str(e)}")
+                        return ""
+                    
+                else:  # For negative strand
+                    fetch_start = min_genomic_pos - 1  # Convert to 0-based
+                    fetch_end = max_genomic_pos
+                    
+                    print(f"Fetching sequence for negative strand: {fetch_start}-{fetch_end}")
+                    try:
+                        full_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
+                        print(f"Successfully fetched sequence, length: {len(full_seq)}")
+                        # Reverse complement for negative strand
+                        full_seq = self._reverse_complement(full_seq)
+                        if len(full_seq) > 50:
+                            print(f"RC sequence preview: {full_seq[:25]}...{full_seq[-25:]}")
+                        else:
+                            print(f"RC sequence: {full_seq}")
+                        return full_seq
+                    except Exception as e:
+                        print(f"ERROR fetching sequence: {str(e)}")
+                        logging.error(f"Error fetching sequence: {str(e)}")
+                        return ""
+            
+            # Regular processing for non-extended transcripts
+            print("Using regular exon-based sequence extraction")
             sorted_exons = self.transcript.exons
             if self.transcript.strand == '-':
                 sorted_exons = sorted(self.transcript.exons, 
                                     key=lambda x: x.genome_start, 
                                     reverse=True)
             
+            print(f"Number of exons: {len(sorted_exons)}")
             for i, exon in enumerate(sorted_exons):
                 try:
                     fetch_start = exon.genome_start - 1
                     fetch_end = exon.genome_end
                     
+                    print(f"Fetching exon {i+1}: {fetch_start}-{fetch_end}")
                     exon_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
                     
                     if self.transcript.strand == '-':
                         exon_seq = self._reverse_complement(exon_seq)
                         
                     transcript_seq += exon_seq
+                    print(f"Added {len(exon_seq)} bp from exon {i+1}")
                     
                 except Exception as e:
+                    print(f"ERROR fetching sequence for exon {i + 1}: {str(e)}")
                     logging.error(f"Error fetching sequence for exon {i + 1}: {str(e)}")
                     return ""
                     
+            print(f"Complete transcript sequence length: {len(transcript_seq)}")
+            if len(transcript_seq) > 50:
+                print(f"Sequence preview: {transcript_seq[:25]}...{transcript_seq[-25:]}")
             return transcript_seq
             
         except Exception as e:
+            print(f"ERROR in transcript sequence extraction: {str(e)}")
             logging.error(f"Error in transcript sequence extraction: {str(e)}")
             return ""
             
@@ -132,18 +203,25 @@ class TranscriptSequence:
             start = self.transcript.uorf_start - 1
             end = self.transcript.uorf_end
             
+            # Store original coordinates if not already stored
+            if not hasattr(self, 'original_uorf_start'):
+                self.original_uorf_start = self.transcript.uorf_start
+                self.original_uorf_end = self.transcript.uorf_end
+                self.original_mainorf_start = self.transcript.mainorf_start
+                self.original_mainorf_end = self.transcript.mainorf_end
+            
             # Validate coordinates
             if start < 0:
-                logging.error(f"Invalid uORF start coordinate: {start}")
-                return ""
+                logging.warning(f"Invalid uORF start coordinate: {start+1} (adjusted to 1)")
+                start = 0
                 
             if end > len(self.sequence):
-                logging.error(f"Invalid uORF end coordinate: {end} (transcript length: {len(self.sequence)})")
-                return ""
+                logging.warning(f"Invalid uORF end coordinate: {end} (adjusted to transcript length: {len(self.sequence)})")
+                end = len(self.sequence)
                 
-            # Validate extraction length
+            # Check if start is still less than end after adjustments
             if end <= start:
-                logging.error(f"Invalid uORF length: end ({end}) <= start ({start})")
+                logging.error(f"Invalid uORF length after adjustment: end ({end}) <= start ({start})")
                 return ""
             
             uorf_seq = self.sequence[start:end]
@@ -157,7 +235,7 @@ class TranscriptSequence:
         except Exception as e:
             logging.error(f"Error extracting uORF region: {str(e)}")
             return ""
-            
+
     def get_codon_at_position(self, transcript_pos):
         """
         Get codon at given transcript position.
