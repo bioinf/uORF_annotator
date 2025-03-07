@@ -138,23 +138,32 @@ class Transcript:
                 self._extend_transcript_downstream(max_genome_pos, self.uorf_end_genomic)
                 
         else:  # Negative strand
-            # For negative strand, coordinate logic is reversed
+            # For negative strand, the coordinate logic is reversed in genomic space
+            # but the extension logic remains the same in terms of transcript positions
             min_genome_pos = min(self.genome_to_transcript.keys())
             max_genome_pos = max(self.genome_to_transcript.keys())
             
             print(f"Transcript genomic range: {min_genome_pos}-{max_genome_pos} (negative strand)")
             
-            # Check if uORF start is after transcript end (remember, for negative strand, "start" is 3' end)
-            if self.uorf_start_genomic > max_genome_pos:
-                print(f"uORF starts after transcript {self.transcript_id} (pos: {self.uorf_start_genomic} > {max_genome_pos})")
-                logging.info(f"uORF starts after transcript {self.transcript_id} (pos: {self.uorf_start_genomic} > {max_genome_pos})")
-                self._extend_transcript_downstream(max_genome_pos, self.uorf_start_genomic)
+            # On the negative strand, 5' end (transcript start) corresponds to max_genome_pos
+            # 3' end (transcript end) corresponds to min_genome_pos
+            
+            # For negative strand, uORF genomic coordinates can be in reverse order
+            # relative to the direction of transcription, so we check both cases
+            
+            # Check if uORF extends beyond the 5' end of transcript (greater than max_genome_pos)
+            if self.uorf_start_genomic > max_genome_pos or self.uorf_end_genomic > max_genome_pos:
+                print(f"uORF extends beyond 5' end of transcript {self.transcript_id} on negative strand")
+                extend_pos = max(self.uorf_start_genomic, self.uorf_end_genomic)
+                logging.info(f"Extending transcript {self.transcript_id} at 5' end (negative strand): {max_genome_pos} -> {extend_pos}")
+                self._extend_transcript_downstream(max_genome_pos, extend_pos)
                 
-            # Check if uORF end is before transcript start
-            if self.uorf_end_genomic < min_genome_pos:
-                print(f"uORF ends before transcript {self.transcript_id} (pos: {self.uorf_end_genomic} < {min_genome_pos})")
-                logging.info(f"uORF ends before transcript {self.transcript_id} (pos: {self.uorf_end_genomic} < {min_genome_pos})")
-                self._extend_transcript_upstream(min_genome_pos, self.uorf_end_genomic)
+            # Check if uORF extends beyond the 3' end of transcript (less than min_genome_pos)
+            if self.uorf_start_genomic < min_genome_pos or self.uorf_end_genomic < min_genome_pos:
+                print(f"uORF extends beyond 3' end of transcript {self.transcript_id} on negative strand")
+                extend_pos = min(self.uorf_start_genomic, self.uorf_end_genomic)
+                logging.info(f"Extending transcript {self.transcript_id} at 3' end (negative strand): {min_genome_pos} -> {extend_pos}")
+                self._extend_transcript_upstream(min_genome_pos, extend_pos)
                 
         if self.was_extended:
             print(f"After extension: Transcript now spans {min(self.genome_to_transcript.keys())}-{max(self.genome_to_transcript.keys())}")

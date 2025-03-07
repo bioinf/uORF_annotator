@@ -93,30 +93,66 @@ class CoordinateConverter:
             cds_by_transcript[transcript_id]['ends'].append(parsed['end'])
 
     def _parse_bed(self, gtf_data: Dict) -> None:
-            """
-            Parse BED file and create transcript objects.
+        """
+        Parse BED file and create transcript objects.
+        
+        Args:
+            gtf_data: Dictionary containing CDS and exon information from GTF
+        """
+        bed_df = pd.read_csv(self.bed_file, sep='\t', header=None)
+        
+        print("\n=== DEBUG: BED Entries ===")
+        for idx, bed_row in bed_df.iterrows():
+            print(f"BED Row {idx}: {bed_row[0]}, {bed_row[1]}, {bed_row[2]}, {bed_row[3]}, strand: {bed_row[5]}")
+        print("=== END BED Entries ===\n")
+        
+        # Create a dictionary to track which transcripts have been processed
+        processed_transcripts = {}
+        
+        for _, bed_row in bed_df.iterrows():
+            transcript_id = bed_row[3].split('|')[0].split('.')[0]
+            uorf_id = f"{transcript_id}_uorf_{len(processed_transcripts.get(transcript_id, []))+1}"
             
-            Args:
-                gtf_data: Dictionary containing CDS and exon information from GTF
-            """
-            bed_df = pd.read_csv(self.bed_file, sep='\t', header=None)
+            print(f"\nProcessing transcript: {transcript_id}, uORF ID: {uorf_id}")
+            print(f"uORF genomic coords (from BED): {int(bed_row[1]) + 1}-{int(bed_row[2])}")
             
-            print("\n=== DEBUG: BED Entries ===")
-            for idx, bed_row in bed_df.iterrows():
-                print(f"BED Row {idx}: {bed_row[0]}, {bed_row[1]}, {bed_row[2]}, {bed_row[3]}, strand: {bed_row[5]}")
-            print("=== END BED Entries ===\n")
-            
-            for _, bed_row in bed_df.iterrows():
-                transcript_id = bed_row[3].split('|')[0].split('.')[0]
-                
-                print(f"\nProcessing transcript: {transcript_id}")
-                print(f"uORF genomic coords (from BED): {int(bed_row[1]) + 1}-{int(bed_row[2])}")
-                
-                if transcript_id in gtf_data['exons']:
-                    print(f"Found exons for {transcript_id}: {len(gtf_data['exons'][transcript_id])} exons")
-                    mainorf_coords = self._get_mainorf_coords(transcript_id, gtf_data['cds'])
-                    print(f"MainORF genomic coords: {mainorf_coords[0]}-{mainorf_coords[1]}")
+            if transcript_id in gtf_data['exons']:
+                print(f"Found exons for {transcript_id}: {len(gtf_data['exons'][transcript_id])} exons")
+                mainorf_coords = self._get_mainorf_coords(transcript_id, gtf_data['cds'])
+                print(f"MainORF genomic coords: {mainorf_coords[0]}-{mainorf_coords[1]}")
 
+                # Check if we already created a transcript object for this transcript_id
+                if transcript_id in self.transcripts:
+                    print(f"Transcript {transcript_id} already exists, adding another uORF")
+                    
+                    # Get the existing transcript
+                    existing_transcript = self.transcripts[transcript_id]
+                    
+                    # Create a new transcript with the same properties but different uORF
+                    new_transcript = Transcript(
+                        transcript_id=uorf_id,  # Use unique ID for the new transcript-uORF pair
+                        chromosome=existing_transcript.chromosome,
+                        strand=existing_transcript.strand,
+                        exons=existing_transcript.exons.copy(),
+                        mainorf_start=existing_transcript.mainorf_start_genomic,
+                        mainorf_end=existing_transcript.mainorf_end_genomic,
+                        uorf_start=int(bed_row[1]) + 1,
+                        uorf_end=int(bed_row[2])
+                    )
+                    
+                    # Store the new transcript-uORF pair
+                    self.transcripts[uorf_id] = new_transcript
+                    
+                    # Track that we've processed this transcript
+                    if transcript_id not in processed_transcripts:
+                        processed_transcripts[transcript_id] = []
+                    processed_transcripts[transcript_id].append(uorf_id)
+                    
+                    # Debugging output
+                    t = new_transcript
+                    print(f"Created additional uORF transcript {uorf_id} for {transcript_id}:")
+                else:
+                    # Create the first transcript-uORF pair for this transcript_id
                     self.transcripts[transcript_id] = Transcript(
                         transcript_id=transcript_id,
                         chromosome=bed_row[0],
@@ -128,20 +164,34 @@ class CoordinateConverter:
                         uorf_end=int(bed_row[2])
                     )
                     
+                    # Track that we've processed this transcript
+                    processed_transcripts[transcript_id] = [transcript_id]
+                    
+                    # Debugging output
                     t = self.transcripts[transcript_id]
                     print(f"Created transcript {transcript_id}:")
-                    print(f"  Strand: {t.strand}")
-                    print(f"  uORF genomic: {t.uorf_start_genomic}-{t.uorf_end_genomic}")
-                    print(f"  uORF transcript: {t.uorf_start}-{t.uorf_end}")
-                    print(f"  MainORF genomic: {t.mainorf_start_genomic}-{t.mainorf_end_genomic}")
-                    print(f"  MainORF transcript: {t.mainorf_start}-{t.mainorf_end}")
-                    print(f"  Was extended: {getattr(t, 'was_extended', False)}")
-                    
-                    min_g = min(t.genome_to_transcript.keys()) if t.genome_to_transcript else None
-                    max_g = max(t.genome_to_transcript.keys()) if t.genome_to_transcript else None
-                    print(f"  Genomic range: {min_g}-{max_g}")
-                else:
-                    print(f"WARNING: No exons found for transcript {transcript_id}")
+                
+                # Common debugging for both cases
+                print(f"  Strand: {t.strand}")
+                print(f"  uORF genomic: {t.uorf_start_genomic}-{t.uorf_end_genomic}")
+                print(f"  uORF transcript: {t.uorf_start}-{t.uorf_end}")
+                print(f"  MainORF genomic: {t.mainorf_start_genomic}-{t.mainorf_end_genomic}")
+                print(f"  MainORF transcript: {t.mainorf_start}-{t.mainorf_end}")
+                print(f"  Was extended: {getattr(t, 'was_extended', False)}")
+                
+                # Checks for genomic range
+                min_g = min(t.genome_to_transcript.keys()) if t.genome_to_transcript else None
+                max_g = max(t.genome_to_transcript.keys()) if t.genome_to_transcript else None
+                print(f"  Genomic range: {min_g}-{max_g}")
+            else:
+                print(f"WARNING: No exons found for transcript {transcript_id}")
+
+        # Print summary of transcripts with multiple uORFs
+        print("\n=== Multiple uORF Summary ===")
+        for transcript_id, uorf_ids in processed_transcripts.items():
+            if len(uorf_ids) > 1:
+                print(f"Transcript {transcript_id} has {len(uorf_ids)} uORFs: {', '.join(uorf_ids)}")
+        print("===========================\n")
 
     def _get_mainorf_coords(self, transcript_id: str, cds_data: Dict) -> Tuple[int, int]:
         """

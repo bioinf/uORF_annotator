@@ -462,31 +462,62 @@ class VariantAnnotator:
             pos = int(variant_data['position'])
             ref = variant_data['ref_allele']
             alt = variant_data['alt_allele']
+            
+            print(f"\nDEBUG: Calculating codon change for position {pos}")
+            print(f"Ref allele: {ref}, Alt allele: {alt}")
+            print(f"uORF coordinates: {self.transcript_seq.transcript.uorf_start}-{self.transcript_seq.transcript.uorf_end}")
 
             if len(ref) != len(alt):
+                print(f"Skipping codon change calculation: ref and alt lengths differ")
                 return "NA"
 
+            # Получаем кодон
             ref_codon = self.transcript_seq.get_codon_at_position(pos)
             if not ref_codon:
+                print(f"Failed to get reference codon")
                 return "NA"
+                    
+            print(f"Reference codon: {ref_codon}")
 
-            # Calculate position within codon - use uorf_start as reference
-            rel_pos = pos - self.transcript_seq.transcript.uorf_start
-            pos_in_codon = rel_pos % 3
+            if pos < self.transcript_seq.transcript.uorf_start:
+                if abs(pos - self.transcript_seq.transcript.uorf_start) <= 3:
+                    print(f"Variant is before uORF start but affects start codon")
+                    pos_in_codon = pos - (self.transcript_seq.transcript.uorf_start - 3)
+                    print(f"Position in codon (relative to start): {pos_in_codon}")
+                else:
+                    print(f"Variant is too far from uORF start")
+                    return "NA"
+            elif pos > self.transcript_seq.transcript.uorf_end:
+                if abs(pos - self.transcript_seq.transcript.uorf_end) <= 3:
+                    print(f"Variant is after uORF end but affects stop codon")
+                    pos_in_codon = 3 - (pos - self.transcript_seq.transcript.uorf_end)
+                    print(f"Position in codon (relative to end): {pos_in_codon}")
+                else:
+                    print(f"Variant is too far from uORF end")
+                    return "NA"
+            else:
+                rel_pos = pos - self.transcript_seq.transcript.uorf_start
+                pos_in_codon = rel_pos % 3
+                print(f"Position within codon (standard case): {pos_in_codon}")
 
             alt_codon = list(ref_codon)
             # Only need to reverse complement for negative strand
             if self.transcript_seq.transcript.strand == '-':
+                alt_before = alt
                 alt = self._reverse_complement(alt)
+                print(f"Negative strand: reverse complemented alt allele {alt_before} -> {alt}")
+                
             alt_codon[pos_in_codon] = alt
             alt_codon = ''.join(alt_codon)
+            print(f"Alternative codon: {alt_codon}")
 
             return f"{ref_codon}>{alt_codon}"
 
         except Exception as e:
             logging.error(f"Error getting codon change: {str(e)}")
+            print(f"Exception in get_codon_change: {str(e)}")
             return "NA"
-        
+
     @staticmethod
     def _reverse_complement(sequence):
         """
@@ -523,46 +554,70 @@ class VariantAnnotator:
             ref = variant_data['ref_allele']
             alt = variant_data['alt_allele']
             
+            print(f"\nDEBUG: Determining consequence for position {pos}")
+            print(f"Ref allele: {ref}, Alt allele: {alt}")
+            
             uorf_start = self.transcript_seq.transcript.uorf_start
             uorf_end = self.transcript_seq.transcript.uorf_end
             
-            # Check if position is within the uORF
-            if pos < uorf_start or pos > uorf_end:
+            print(f"uORF coordinates: {uorf_start}-{uorf_end}")
+            
+            near_start = abs(pos - uorf_start) <= 3
+            near_end = abs(pos - uorf_end) <= 3
+            
+            # Check if position is within the uORF or close to its boundaries
+            if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+                print(f"Position {pos} is outside uORF range {uorf_start}-{uorf_end} and not near boundaries")
                 return UORFConsequence.NON_CODING
 
             if self._is_frameshift(ref, alt):
+                print(f"Variant is a frameshift")
                 return UORFConsequence.FRAMESHIFT
 
             codon_change = self.get_codon_change(variant_data)
             if codon_change == "NA":
+                print(f"Could not determine codon change")
                 return UORFConsequence.NON_CODING
 
             ref_codon, alt_codon = codon_change.split('>')
+            print(f"Codon change: {ref_codon}>{alt_codon}")
 
             # Check start codon effect (always at beginning of uORF)
-            is_at_start = pos - uorf_start < 3
+            is_at_start = near_start or (pos >= uorf_start and pos < uorf_start + 3)
+            print(f"Is at start: {is_at_start}")
+            
             if is_at_start and ref_codon in self.START_CODONS:
                 if alt_codon not in self.START_CODONS:
+                    print(f"Start codon {ref_codon} changed to {alt_codon} - START_LOST")
                     return UORFConsequence.START_LOST
+                print(f"Start codon changed but remains a start codon")
 
             # Check stop codon effect (always at end of uORF)
-            is_at_end = uorf_end - pos < 3
+            is_at_end = near_end or (pos <= uorf_end and pos > uorf_end - 3)
+            print(f"Is at end: {is_at_end}")
+            
             if is_at_end:
                 if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                    print(f"Stop codon {ref_codon} changed to {alt_codon} - STOP_LOST")
                     return UORFConsequence.STOP_LOST
                 if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                    print(f"Non-stop codon {ref_codon} changed to stop codon {alt_codon} - STOP_GAINED")
                     return UORFConsequence.STOP_GAINED
 
             # Check for stop codon anywhere in the uORF
             if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
+                print(f"Stop codon gained in the middle of uORF")
                 return UORFConsequence.STOP_GAINED
                 
             # For single nucleotide variants inside uORF
             if len(ref) == len(alt) == 1:
                 if self._is_synonymous(ref_codon, alt_codon):
+                    print(f"Synonymous change: {ref_codon} ({self.CODON_TABLE.get(ref_codon)}) -> {alt_codon} ({self.CODON_TABLE.get(alt_codon)})")
                     return UORFConsequence.SYNONYMOUS
+                print(f"Missense change: {ref_codon} ({self.CODON_TABLE.get(ref_codon)}) -> {alt_codon} ({self.CODON_TABLE.get(alt_codon)})")
                 return UORFConsequence.MISSENSE
 
+            print(f"Default consequence: NON_CODING")
             return UORFConsequence.NON_CODING
 
         except Exception as e:

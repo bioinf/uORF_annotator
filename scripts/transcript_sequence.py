@@ -93,6 +93,7 @@ class TranscriptSequence:
             
             print(f"\nExtracting sequence for transcript {self.transcript.transcript_id}")
             print(f"Was transcript extended: {was_extended}")
+            print(f"Strand: {self.transcript.strand}")
             
             # Check for uORF coordinates outside of transcript
             if was_extended:
@@ -106,51 +107,41 @@ class TranscriptSequence:
                 print(f"Extended genomic range: {min_genomic_pos}-{max_genomic_pos}")
                 
                 # Extract the entire region for extended transcript
-                if self.transcript.strand == '+':
-                    fetch_start = min_genomic_pos - 1  # Convert to 0-based
-                    fetch_end = max_genomic_pos
+                fetch_start = min_genomic_pos - 1  # Convert to 0-based
+                fetch_end = max_genomic_pos
+                
+                print(f"Fetching sequence: {fetch_start}-{fetch_end} (strand: {self.transcript.strand})")
+                try:
+                    # Get sequence in genomic coordinates
+                    full_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
+                    print(f"Successfully fetched sequence, length: {len(full_seq)}")
                     
-                    print(f"Fetching sequence for positive strand: {fetch_start}-{fetch_end}")
-                    try:
-                        full_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
-                        print(f"Successfully fetched sequence, length: {len(full_seq)}")
-                        if len(full_seq) > 50:
-                            print(f"Sequence preview: {full_seq[:25]}...{full_seq[-25:]}")
-                        else:
-                            print(f"Sequence: {full_seq}")
-                        return full_seq
-                    except Exception as e:
-                        print(f"ERROR fetching sequence: {str(e)}")
-                        logging.error(f"Error fetching sequence: {str(e)}")
-                        return ""
-                    
-                else:  # For negative strand
-                    fetch_start = min_genomic_pos - 1  # Convert to 0-based
-                    fetch_end = max_genomic_pos
-                    
-                    print(f"Fetching sequence for negative strand: {fetch_start}-{fetch_end}")
-                    try:
-                        full_seq = fasta.fetch(self.chromosome, fetch_start, fetch_end).upper()
-                        print(f"Successfully fetched sequence, length: {len(full_seq)}")
-                        # Reverse complement for negative strand
+                    # For negative strand, do reverse complement
+                    if self.transcript.strand == '-':
                         full_seq = self._reverse_complement(full_seq)
-                        if len(full_seq) > 50:
-                            print(f"RC sequence preview: {full_seq[:25]}...{full_seq[-25:]}")
-                        else:
-                            print(f"RC sequence: {full_seq}")
-                        return full_seq
-                    except Exception as e:
-                        print(f"ERROR fetching sequence: {str(e)}")
-                        logging.error(f"Error fetching sequence: {str(e)}")
-                        return ""
+                        print(f"Reverse complemented sequence for negative strand")
+                    
+                    if len(full_seq) > 50:
+                        print(f"Sequence preview: {full_seq[:25]}...{full_seq[-25:]}")
+                    else:
+                        print(f"Sequence: {full_seq}")
+                        
+                    return full_seq
+                except Exception as e:
+                    print(f"ERROR fetching sequence: {str(e)}")
+                    logging.error(f"Error fetching sequence: {str(e)}")
+                    return ""
             
             # Regular processing for non-extended transcripts
             print("Using regular exon-based sequence extraction")
             sorted_exons = self.transcript.exons
+            
+            # For negative strand, exons need to be processed in reverse order
             if self.transcript.strand == '-':
                 sorted_exons = sorted(self.transcript.exons, 
                                     key=lambda x: x.genome_start, 
                                     reverse=True)
+                print(f"Using reversed exon order for negative strand")
             
             print(f"Number of exons: {len(sorted_exons)}")
             for i, exon in enumerate(sorted_exons):
@@ -163,6 +154,7 @@ class TranscriptSequence:
                     
                     if self.transcript.strand == '-':
                         exon_seq = self._reverse_complement(exon_seq)
+                        print(f"Reverse complemented exon {i+1} for negative strand")
                         
                     transcript_seq += exon_seq
                     print(f"Added {len(exon_seq)} bp from exon {i+1}")
@@ -181,7 +173,7 @@ class TranscriptSequence:
             print(f"ERROR in transcript sequence extraction: {str(e)}")
             logging.error(f"Error in transcript sequence extraction: {str(e)}")
             return ""
-            
+         
     def _extract_uorf_region(self):
         """
         Extract uORF sequence from transcript sequence.
@@ -251,27 +243,60 @@ class TranscriptSequence:
             return None
             
         try:
-            # Calculate relative position within uORF
-            # In transcript coordinates, we always calculate from the start of uORF
-            rel_pos = transcript_pos - self.transcript.uorf_start
+            print(f"\nDEBUG: Getting codon for position {transcript_pos}")
+            print(f"uORF region length: {len(self.uorf_region)}")
+            print(f"uORF start: {self.transcript.uorf_start}")
+            print(f"uORF end: {self.transcript.uorf_end}")
             
-            # Validate relative position
-            if rel_pos < 0:
-                logging.error(f"Position {transcript_pos} is before uORF start ({self.transcript.uorf_start})")
-                return None
-                
-            codon_start = (rel_pos // 3) * 3
-            codon_end = codon_start + 3
+            near_start = abs(transcript_pos - self.transcript.uorf_start) <= 3
+            near_end = abs(transcript_pos - self.transcript.uorf_end) <= 3
+            
+            print(f"Position is near uORF start: {near_start}")
+            print(f"Position is near uORF end: {near_end}")
+            
+            if transcript_pos < self.transcript.uorf_start and near_start:
 
+                print(f"Position is just before uORF start, attempting to get start codon")
+
+                codon = self.uorf_region[:3]
+                print(f"Extracted start codon: {codon}")
+                return codon
+                
+            if transcript_pos > self.transcript.uorf_end and near_end:
+                print(f"Position is just after uORF end, attempting to get stop codon")
+                codon = self.uorf_region[-3:]
+                print(f"Extracted stop codon: {codon}")
+                return codon
+            
+            # Calculate relative position within uORF
+            rel_pos = transcript_pos - self.transcript.uorf_start
+            print(f"Relative position within uORF: {rel_pos}")
+            
+            # Validate relative position (standard case)
+            if rel_pos < 0 or rel_pos >= len(self.uorf_region):
+                logging.error(f"Position {transcript_pos} is outside uORF range ({self.transcript.uorf_start}-{self.transcript.uorf_end})")
+                return None
+                    
+            # Calculate the frame for this position (0, 1, or 2)
+            frame = rel_pos % 3
+            print(f"Frame: {frame}")
+            
+            # Calculate the codon start by finding the start of the codon containing this position
+            codon_start = rel_pos - frame
+            codon_end = codon_start + 3
+            print(f"Codon coordinates within uORF: {codon_start}:{codon_end}")
+
+            # Check if the calculated position is valid
             if codon_start < 0:
-                logging.error(f"Invalid codon start: {codon_start}")
+                logging.error(f"Invalid codon start: position too close to uORF start")
                 return None
                 
             if codon_end > len(self.uorf_region):
-                logging.error(f"Codon position out of range: {codon_start}")
+                logging.error(f"Codon position out of range: codon extends beyond uORF region")
                 return None
-                
+            
             codon = self.uorf_region[codon_start:codon_end]
+            print(f"Extracted codon: {codon}")
             return codon
             
         except Exception as e:
