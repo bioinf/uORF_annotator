@@ -12,15 +12,7 @@ class Pipeline:
     """Main pipeline for variant analysis and annotation."""
     
     def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str):
-        """
-        Initialize pipeline with input files.
-        
-        Args:
-            bed_file: Path to BED file with uORF annotations
-            vcf_file: Path to VCF file with variants
-            gtf_file: Path to GTF file with transcript annotations
-            fasta_file: Path to reference FASTA file
-        """
+        """Initialize pipeline with input files."""
         self.bed_file = bed_file
         self.vcf_file = vcf_file
         self.fasta_file = fasta_file
@@ -29,12 +21,7 @@ class Pipeline:
         self.processor = VariantProcessor(self.converter, self.fasta)
 
     def process_variants(self) -> pd.DataFrame:
-        """
-        Process and annotate variants.
-        
-        Returns:
-            DataFrame with annotated variants
-        """
+        """Process and annotate variants."""
         intersected = self._intersect_files()
         if intersected.empty:
             logging.error("No intersections found between VCF and BED!")
@@ -60,12 +47,7 @@ class Pipeline:
         return results_df
 
     def _intersect_files(self) -> pd.DataFrame:
-        """
-        Intersect VCF and BED files using bedtools.
-        
-        Returns:
-            DataFrame containing intersection results
-        """
+        """Intersect VCF and BED files using bedtools."""
         vcf = BedTool(self.vcf_file)
         bed = BedTool(self.bed_file)
         intersection = vcf.intersect(bed, wa=True, wb=True)

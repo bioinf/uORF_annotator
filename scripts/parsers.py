@@ -19,15 +19,6 @@ class GTFParser:
             
         Returns:
             Dictionary containing parsed features or None if parsing fails
-            
-        The returned dictionary contains:
-            - chromosome: Chromosome name
-            - feature: Feature type (e.g., exon, CDS)
-            - start: Feature start position
-            - end: Feature end position
-            - strand: DNA strand
-            - transcript_id: ID of the transcript
-            - is_cds: Boolean indicating if feature is CDS
         """
         try:
             fields = line.strip().split('\t')

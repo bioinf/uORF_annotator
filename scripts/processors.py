@@ -9,30 +9,14 @@ from transcript_sequence import TranscriptSequence
 
 class VariantProcessor:
     def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile):
-        """
-        Initialize the variant processor with coordinate converter and reference sequence.
-        
-        Args:
-            converter: CoordinateConverter object for genomic/transcript coordinate conversion
-            fasta: FastaFile object containing reference sequences
-        """
+        """Initialize the variant processor with coordinate converter and reference sequence."""
         self.converter = converter
         self.fasta = fasta
         self.annotator = None
         self.debug_info = {}
 
     def process_variant(self, row: pd.Series) -> Optional[Dict]:
-        """
-        Process a variant to determine its effect on uORF and main CDS.
-        Also handles cases where transcript has been extended to include uORF
-        or where multiple uORFs exist for a single transcript.
-        
-        Args:
-            row: Pandas Series containing variant information
-            
-        Returns:
-            Dictionary with annotated variant information, or None if processing fails
-        """
+        """Process a variant to determine its effect on uORF and main CDS."""
         try:
             # Extract variant information
             chrom = row['col0']
@@ -40,12 +24,10 @@ class VariantProcessor:
             ref_allele = row['col3']
             alt_allele = row['col4']
             
-            print(f"\n==========================================")
-            print(f"Processing variant at {chrom}:{vcf_pos} {ref_allele}>{alt_allele}")
+            logging.debug(f"Processing variant at {chrom}:{vcf_pos} {ref_allele}>{alt_allele}")
             
             # Get transcript information
             original_transcript_id = self._extract_transcript_id(row['col11'])
-            print(f"Original transcript ID from BED: {original_transcript_id}")
             
             # Find all matching transcripts, including those with multiple uORFs
             matching_transcripts = [
@@ -54,33 +36,19 @@ class VariantProcessor:
             ]
             
             if not matching_transcripts:
-                print(f"WARNING: No transcripts found for {original_transcript_id}")
                 logging.warning(f"No transcripts found for {original_transcript_id}")
                 return None
             
-            print(f"Found {len(matching_transcripts)} matching transcripts: {matching_transcripts}")
+            logging.debug(f"Found {len(matching_transcripts)} matching transcripts: {matching_transcripts}")
             
             # Process each matching transcript-uORF pair
             results = []
             
             for transcript_id in matching_transcripts:
-                print(f"\nProcessing transcript-uORF: {transcript_id}")
+                logging.debug(f"Processing transcript-uORF: {transcript_id}")
                 
                 transcript_obj = self.converter.transcripts[transcript_id]
-                print(f"Transcript details:")
-                print(f"  Strand: {transcript_obj.strand}")
-                print(f"  uORF genomic: {transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}")
-                print(f"  uORF transcript: {transcript_obj.uorf_start}-{transcript_obj.uorf_end}")
-                print(f"  MainORF genomic: {transcript_obj.mainorf_start_genomic}-{transcript_obj.mainorf_end_genomic}")
-                print(f"  MainORF transcript: {transcript_obj.mainorf_start}-{transcript_obj.mainorf_end}")
-                print(f"  Was extended: {getattr(transcript_obj, 'was_extended', False)}")
                 
-                # Check genomic range coverage
-                min_g = min(transcript_obj.genome_to_transcript.keys()) if transcript_obj.genome_to_transcript else None
-                max_g = max(transcript_obj.genome_to_transcript.keys()) if transcript_obj.genome_to_transcript else None
-                print(f"  Genomic range covered: {min_g}-{max_g}")
-                print(f"  Variant position: {vcf_pos} (inside range: {min_g <= vcf_pos <= max_g if min_g and max_g else 'unknown'})")
-
                 # Log debug information
                 self._log_debug_info(transcript_id, transcript_obj, vcf_pos)
 
@@ -90,25 +58,23 @@ class VariantProcessor:
                 # Get transcript position for the variant
                 variant_coords = transcript_obj.get_coordinates(vcf_pos)
                 if not variant_coords:
-                    print(f"INFO: Position {vcf_pos} not in transcript coordinates for {transcript_id}, skipping")
-                    continue  # Skip to next transcript rather than returning None
+                    logging.debug(f"Position {vcf_pos} not in transcript coordinates for {transcript_id}, skipping")
+                    continue  # Skip to next transcript
                     
-                print(f"Variant coordinates: genomic {variant_coords.genomic}, transcript {variant_coords.transcript}")
-
                 # Check if uORF coordinates are still missing after potential extension
                 if transcript_obj.uorf_start is None or transcript_obj.uorf_end is None:
-                    print(f"INFO: Missing uORF transcript coordinates for {transcript_id}, skipping")
+                    logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
                     continue  # Skip to next transcript
                     
                 # Create TranscriptSequence object
                 transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
                 if not transcript_seq.sequence:
-                    print(f"INFO: Could not extract transcript sequence for {transcript_id}, skipping")
+                    logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
                     continue
                     
                 # Check if uORF region was extracted successfully
                 if not transcript_seq.uorf_region:
-                    print(f"INFO: Failed to extract uORF region for {transcript_id}, skipping")
+                    logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
                     continue
                     
                 # Initialize annotator with TranscriptSequence
@@ -201,7 +167,7 @@ class VariantProcessor:
                     result['Transcript_Extended'] = 'Yes'
                     
                 results.append(result)
-                print(f"Successfully processed variant for transcript-uORF: {transcript_id}")
+                logging.debug(f"Successfully processed variant for transcript-uORF: {transcript_id}")
             
             # Return the first successful result, or None if all failed
             if results:
@@ -213,14 +179,7 @@ class VariantProcessor:
             return None
 
     def _log_debug_info(self, transcript_id, transcript_obj, vcf_pos):
-        """
-        Log debug information about transcript coordinates.
-        
-        Args:
-            transcript_id: ID of the transcript
-            transcript_obj: Transcript object
-            vcf_pos: Variant position in genome coordinates
-        """
+        """Log debug information about transcript coordinates."""
         debug_info = {
             'transcript_id': transcript_id,
             'strand': transcript_obj.strand,
@@ -235,26 +194,14 @@ class VariantProcessor:
         # Store debug info
         self.debug_info[transcript_id] = debug_info
         
-        # Log additional information for diagnostics
-        if getattr(transcript_obj, 'was_extended', False):
-            logging.info(f"Transcript {transcript_id} was extended to include uORF")
-            logging.info(f"Transcript coordinate maps now span from " +
-                       f"{min(transcript_obj.genome_to_transcript.keys())} to " +
-                       f"{max(transcript_obj.genome_to_transcript.keys())} in genomic coordinates")
-            logging.info(f"Transcript coordinate maps now span from " +
-                       f"{min(transcript_obj.transcript_to_genome.keys())} to " +
-                       f"{max(transcript_obj.transcript_to_genome.keys())} in transcript coordinates")
-        
         # Check for potential issues
         if transcript_obj.uorf_start is None and transcript_obj.uorf_start_genomic is not None:
             logging.warning(f"uORF genomic coordinates exist but transcript coordinates are None for {transcript_id}")
-            logging.warning(f"uORF genomic: {transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}")
             
             # Show transcript boundaries
             if transcript_obj.genome_to_transcript:
                 min_pos = min(transcript_obj.genome_to_transcript.keys())
                 max_pos = max(transcript_obj.genome_to_transcript.keys())
-                logging.warning(f"Transcript genomic span: {min_pos}-{max_pos}")
                 
                 # Check if uORF is outside transcript bounds
                 if transcript_obj.uorf_start_genomic < min_pos or transcript_obj.uorf_start_genomic > max_pos:
@@ -272,28 +219,7 @@ class VariantProcessor:
             if transcript_obj.uorf_start < 1 or transcript_obj.uorf_end < 1:
                 logging.warning(f"Invalid transcript coordinates: less than 1 for {transcript_id}")
 
-    def _reverse_complement(self, sequence: str) -> str:
-        """
-        Get reverse complement of a DNA sequence.
-        
-        Args:
-            sequence: DNA sequence to complement
-            
-        Returns:
-            Reverse complement of the input sequence
-        """
-        complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
-        return ''.join(complement.get(base.upper(), base) for base in reversed(sequence))
-
     @staticmethod
     def _extract_transcript_id(bed_name: str) -> str:
-        """
-        Extract transcript ID from BED name field.
-        
-        Args:
-            bed_name: Name field from BED file
-            
-        Returns:
-            Extracted transcript ID
-        """
+        """Extract transcript ID from BED name field."""
         return bed_name.split('|')[0].split('.')[0]
