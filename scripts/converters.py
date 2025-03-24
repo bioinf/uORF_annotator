@@ -77,9 +77,22 @@ class CoordinateConverter:
         # Create a dictionary to track which transcripts have been processed
         processed_transcripts = {}
         
+        # Store the raw bed entries for overlap determination
+        self.raw_bed_entries = {}
+        
         for _, bed_row in bed_df.iterrows():
             transcript_id = bed_row[3].split('|')[0].split('.')[0]
             uorf_id = f"{transcript_id}_uorf_{len(processed_transcripts.get(transcript_id, []))+1}"
+            
+            # Store raw bed entry before any processing
+            entry = {
+                'chromosome': bed_row[0],
+                'start': int(bed_row[1]),
+                'end': int(bed_row[2]),
+                'strand': bed_row[5],
+                'transcript_id': transcript_id
+            }
+            self.raw_bed_entries[uorf_id if transcript_id in processed_transcripts else transcript_id] = entry
             
             if transcript_id in gtf_data['exons']:
                 mainorf_coords = self._get_mainorf_coords(transcript_id, gtf_data['cds'])
@@ -130,6 +143,41 @@ class CoordinateConverter:
         for transcript_id, uorf_ids in processed_transcripts.items():
             if len(uorf_ids) > 1:
                 logging.info(f"Transcript {transcript_id} has {len(uorf_ids)} uORFs: {', '.join(uorf_ids)}")
+                
+        # After all transcripts are created, determine overlaps using raw coordinates
+        self._determine_overlaps()
+
+    def _determine_overlaps(self):
+        """
+        Determine which uORFs overlap with mainCDS based on raw genomic coordinates
+        from the BED and GTF files, before any transcript extensions.
+        """
+        for transcript_id, transcript in self.transcripts.items():
+            # Get the raw entry
+            raw_entry = self.raw_bed_entries.get(transcript_id)
+            if not raw_entry:
+                continue
+                
+            # A uORF and mainCDS overlap if:
+            # For + strand: uORF end >= mainCDS start
+            # For - strand: uORF start <= mainCDS end
+            if transcript.strand == '+':
+                # Raw uORF end is in BED format (0-based, exclusive)
+                uorf_end = raw_entry['end']
+                # MainORF start is in GTF format (1-based, inclusive)
+                mainorf_start = transcript.mainorf_start_genomic
+                
+                if mainorf_start is not None:
+                    transcript.overlaps_maincds = (uorf_end >= mainorf_start)
+                    logging.debug(f"Transcript {transcript_id}: uORF end={uorf_end}, mainCDS start={mainorf_start}, overlap={transcript.overlaps_maincds}")
+            else:
+                # For - strand, coordinates might be swapped in the raw data
+                uorf_start = raw_entry['start'] + 1  # Adjust to 1-based
+                mainorf_end = transcript.mainorf_end_genomic
+                
+                if mainorf_end is not None:
+                    transcript.overlaps_maincds = (uorf_start <= mainorf_end)
+                    logging.debug(f"Transcript {transcript_id}: uORF start={uorf_start}, mainCDS end={mainorf_end}, overlap={transcript.overlaps_maincds}")
 
     def _get_mainorf_coords(self, transcript_id: str, cds_data: Dict) -> Tuple[int, int]:
         """Get main ORF coordinates for a transcript."""

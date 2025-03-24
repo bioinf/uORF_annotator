@@ -17,6 +17,9 @@ class TranscriptSequence:
         self.transcript = transcript_obj
         self.chromosome = chromosome
 
+        # Store original coordinates before any modifications
+        self._store_original_coordinates()
+
         # Fix coordinate ordering for negative strand transcripts before extraction
         self._fix_transcript_coordinates()
 
@@ -30,11 +33,10 @@ class TranscriptSequence:
         if not self.uorf_region:
             logging.error(f"Failed to extract uORF region for {transcript_obj.transcript_id}")
     
-    def _fix_transcript_coordinates(self):
+    def _store_original_coordinates(self):
         """
-        Fix transcript coordinates to ensure start < end for processing.
-        For negative strand, we maintain the biological meaning but ensure
-        correct ordering for array indexing.
+        Store the original biological coordinates before any manipulation.
+        This ensures we can always refer back to the true biological coordinates.
         """
         if not hasattr(self.transcript, 'uorf_start') or not hasattr(self.transcript, 'uorf_end'):
             return
@@ -44,6 +46,18 @@ class TranscriptSequence:
         self.original_uorf_end = self.transcript.uorf_end
         self.original_mainorf_start = self.transcript.mainorf_start
         self.original_mainorf_end = self.transcript.mainorf_end
+        
+        # Store original strand information
+        self.original_strand = self.transcript.strand
+    
+    def _fix_transcript_coordinates(self):
+        """
+        Fix transcript coordinates to ensure start < end for processing.
+        For negative strand, we maintain the biological meaning but ensure
+        correct ordering for array indexing.
+        """
+        if not hasattr(self.transcript, 'uorf_start') or not hasattr(self.transcript, 'uorf_end'):
+            return
         
         # For negative strand, ensure start < end for processing
         if self.transcript.strand == '-':
@@ -108,6 +122,8 @@ class TranscriptSequence:
                     
                     # For negative strand, do reverse complement
                     if self.transcript.strand == '-':
+                        logging.debug(f"Doing reverse complement for negative strand extended transcript "
+                                    f"{self.transcript.transcript_id} (length: {len(full_seq)})")
                         full_seq = self._reverse_complement(full_seq)
                         
                     return full_seq
@@ -123,8 +139,10 @@ class TranscriptSequence:
                 sorted_exons = sorted(self.transcript.exons, 
                                     key=lambda x: x.genome_start, 
                                     reverse=True)
+                logging.debug(f"Sorted {len(sorted_exons)} exons for negative strand transcript "
+                            f"{self.transcript.transcript_id}")
             
-            for exon in sorted_exons:
+            for i, exon in enumerate(sorted_exons):
                 try:
                     fetch_start = exon.genome_start - 1
                     fetch_end = exon.genome_end
@@ -133,6 +151,8 @@ class TranscriptSequence:
                     
                     if self.transcript.strand == '-':
                         exon_seq = self._reverse_complement(exon_seq)
+                        logging.debug(f"Reverse complemented exon {i} for negative strand "
+                                    f"(length: {len(exon_seq)})")
                         
                     transcript_seq += exon_seq
                     
@@ -140,12 +160,16 @@ class TranscriptSequence:
                     logging.error(f"Error fetching sequence for exon: {str(e)}")
                     return ""
                     
+            # Log sequence details
+            logging.debug(f"Extracted transcript sequence for {self.transcript.transcript_id}, "
+                        f"strand: {self.transcript.strand}, length: {len(transcript_seq)}")
+                
             return transcript_seq
             
         except Exception as e:
             logging.error(f"Error in transcript sequence extraction: {str(e)}")
             return ""
-         
+
     def _extract_uorf_region(self):
         """
         Extract uORF sequence from transcript sequence.
@@ -167,13 +191,6 @@ class TranscriptSequence:
             start = self.transcript.uorf_start - 1
             end = self.transcript.uorf_end
             
-            # Store original coordinates if not already stored
-            if not hasattr(self, 'original_uorf_start'):
-                self.original_uorf_start = self.transcript.uorf_start
-                self.original_uorf_end = self.transcript.uorf_end
-                self.original_mainorf_start = self.transcript.mainorf_start
-                self.original_mainorf_end = self.transcript.mainorf_end
-            
             # Validate coordinates
             if start < 0:
                 logging.warning(f"Invalid uORF start coordinate: {start+1} (adjusted to 1)")
@@ -190,10 +207,26 @@ class TranscriptSequence:
             
             uorf_seq = self.sequence[start:end]
             
+            # Log details about uORF extraction
+            logging.debug(f"Extracted uORF region for {self.transcript.transcript_id}, "
+                        f"strand: {self.transcript.strand}, coordinates: {start+1}-{end}, "
+                        f"length: {len(uorf_seq)}")
+            
             if len(uorf_seq) == 0:
                 logging.error("Extracted uORF sequence is empty")
                 return ""
                 
+            # Check if uORF sequence has proper start/stop codons for debugging
+            if len(uorf_seq) >= 3:
+                start_codon = uorf_seq[:3]
+                stop_codon = uorf_seq[-3:] if len(uorf_seq) >= 6 else None
+                logging.debug(f"uORF start codon: {start_codon}, stop codon: {stop_codon}")
+                
+                # Note: Since we've already done reverse complement for negative strand,
+                # the start codon should be ATG in the extracted sequence for both strands
+                if start_codon != 'ATG':
+                    logging.warning(f"Unusual start codon for uORF: {start_codon}, expected 'ATG'")
+                    
             return uorf_seq
             
         except Exception as e:
@@ -202,7 +235,7 @@ class TranscriptSequence:
 
     def get_codon_at_position(self, transcript_pos):
         """
-        Get codon at given transcript position.
+        Get codon at given transcript position, with correct handling for negative strand and extended transcripts.
         
         Args:
             transcript_pos: Position in transcript coordinates
@@ -215,25 +248,33 @@ class TranscriptSequence:
             return None
             
         try:
+            was_extended = getattr(self.transcript, 'was_extended', False)
+            
+            logging.debug(f"Getting codon at position {transcript_pos} for transcript {self.transcript.transcript_id}, "
+                        f"extended: {was_extended}")
+            
+            # Check if position is outside uORF boundaries
             near_start = abs(transcript_pos - self.transcript.uorf_start) <= 3
             near_end = abs(transcript_pos - self.transcript.uorf_end) <= 3
             
             if transcript_pos < self.transcript.uorf_start and near_start:
+                # Position is before uORF start but within 3 bp
                 codon = self.uorf_region[:3]
+                logging.debug(f"Position is near uORF start, using first codon: {codon}")
                 return codon
                 
             if transcript_pos > self.transcript.uorf_end and near_end:
+                # Position is after uORF end but within 3 bp
                 codon = self.uorf_region[-3:]
+                logging.debug(f"Position is near uORF end, using last codon: {codon}")
                 return codon
-            
-            # Calculate relative position within uORF
+                
+            # For position within uORF, calculate codon based on reading frame
             rel_pos = transcript_pos - self.transcript.uorf_start
-            
-            # Validate relative position (standard case)
             if rel_pos < 0 or rel_pos >= len(self.uorf_region):
                 logging.error(f"Position {transcript_pos} is outside uORF range ({self.transcript.uorf_start}-{self.transcript.uorf_end})")
                 return None
-                    
+                
             # Calculate the frame for this position (0, 1, or 2)
             frame = rel_pos % 3
             
@@ -252,7 +293,7 @@ class TranscriptSequence:
             
             codon = self.uorf_region[codon_start:codon_end]
             return codon
-            
+                
         except Exception as e:
             logging.error(f"Error getting codon: {str(e)}")
             return None

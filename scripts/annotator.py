@@ -298,7 +298,7 @@ class VariantAnnotator:
             return None
 
     def get_codon_change(self, variant_data: Dict) -> str:
-        """Get codon change string for the variant."""
+        """Get codon change string for the variant, assuming sequence is already correctly oriented."""
         try:
             required_fields = ['position', 'ref_allele', 'alt_allele']
             for field in required_fields:
@@ -312,11 +312,12 @@ class VariantAnnotator:
             if len(ref) != len(alt):
                 return "NA"
 
-            # Get codon
+            # Get the codon containing this position
             ref_codon = self.transcript_seq.get_codon_at_position(pos)
             if not ref_codon:
                 return "NA"
                     
+            # Calculate position within codon
             if pos < self.transcript_seq.transcript.uorf_start:
                 if abs(pos - self.transcript_seq.transcript.uorf_start) <= 3:
                     pos_in_codon = pos - (self.transcript_seq.transcript.uorf_start - 3)
@@ -331,11 +332,8 @@ class VariantAnnotator:
                 rel_pos = pos - self.transcript_seq.transcript.uorf_start
                 pos_in_codon = rel_pos % 3
 
+            # Create alt codon by replacing the specific position
             alt_codon = list(ref_codon)
-            # Only need to reverse complement for negative strand
-            if self.transcript_seq.transcript.strand == '-':
-                alt = self._reverse_complement(alt)
-                
             alt_codon[pos_in_codon] = alt
             alt_codon = ''.join(alt_codon)
 
@@ -344,14 +342,6 @@ class VariantAnnotator:
         except Exception as e:
             logging.error(f"Error getting codon change: {str(e)}")
             return "NA"
-
-    @staticmethod
-    def _reverse_complement(sequence):
-        """Get reverse complement of sequence."""
-        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 
-                    'N': 'N', 'n': 'n'}
-        return ''.join(complement.get(base.upper(), base) 
-                    for base in reversed(sequence))
 
     def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
         """Determine the consequence of a variant on the uORF."""

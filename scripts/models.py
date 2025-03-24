@@ -49,161 +49,225 @@ class Transcript:
         # Flag to indicate if the transcript was extended to include uORF
         self.was_extended = False
         
-        # Build initial coordinate maps from exons
-        self._build_coordinate_maps()
+        # Flag for overlap between uORF and mainCDS (will be set by CoordinateConverter)
+        self.overlaps_maincds = False
         
-        # First check if uORF is outside of transcript boundaries (in genomic coordinates)
-        # and extend the transcript if necessary
-        self._check_and_extend_for_uorf()
+        # Store original coordinates before any manipulation
+        self._store_original_coordinates()
         
-        # AFTER extension, convert genomic coordinates to transcript coordinates
-        self.mainorf_start = self._convert_to_transcript_coords(mainorf_start)
-        self.mainorf_end = self._convert_to_transcript_coords(mainorf_end)
-        self.uorf_start = self._convert_to_transcript_coords(uorf_start)
-        self.uorf_end = self._convert_to_transcript_coords(uorf_end)
+        # Build coordinate map for the transcript, handling extension if needed
+        self._rebuild_coordinates_for_transcript()
+        
+        # Ensure coordinates are consistent with strand orientation
+        self._normalize_coordinates_by_strand()
+
+    def _store_original_coordinates(self):
+        """Store original coordinates before any manipulation."""
+        # Store original genomic coordinates
+        self.original_mainorf_start_genomic = self.mainorf_start_genomic
+        self.original_mainorf_end_genomic = self.mainorf_end_genomic
+        self.original_uorf_start_genomic = self.uorf_start_genomic
+        self.original_uorf_end_genomic = self.uorf_end_genomic
+
+    def _convert_genomic_to_transcript_coords(self):
+        """Convert all genomic coordinates to transcript coordinates."""
+        self.mainorf_start = self._convert_to_transcript_coords(self.mainorf_start_genomic)
+        self.mainorf_end = self._convert_to_transcript_coords(self.mainorf_end_genomic)
+        self.uorf_start = self._convert_to_transcript_coords(self.uorf_start_genomic)
+        self.uorf_end = self._convert_to_transcript_coords(self.uorf_end_genomic)
+        
+        # Store original transcript coordinates
+        self.original_mainorf_start = self.mainorf_start
+        self.original_mainorf_end = self.mainorf_end
+        self.original_uorf_start = self.uorf_start
+        self.original_uorf_end = self.uorf_end
+
+    def _normalize_coordinates_by_strand(self):
+        """
+        Ensure coordinates are properly ordered based on strand.
+        For positive strand: start < end
+        For negative strand, we maintain biological ordering in transcript coordinates,
+        which is already handled by the coordinate conversion process.
+        """
+        # Check if any coordinates are missing
+        if self.uorf_start is None or self.uorf_end is None:
+            logging.warning(f"Missing uORF transcript coordinates for {self.transcript_id}")
+            return
+            
+        if self.mainorf_start is None or self.mainorf_end is None:
+            logging.warning(f"Missing mainORF transcript coordinates for {self.transcript_id}")
+            return
+            
+        # For positive strand, ensure start < end
+        if self.strand == '+':
+            # Fix uORF coordinates if needed
+            if self.uorf_start > self.uorf_end:
+                logging.warning(f"Fixing uORF coordinates for positive strand: {self.uorf_start} > {self.uorf_end}")
+                self.uorf_start, self.uorf_end = self.uorf_end, self.uorf_start
+                
+            # Fix mainORF coordinates if needed
+            if self.mainorf_start > self.mainorf_end:
+                logging.warning(f"Fixing mainORF coordinates for positive strand: {self.mainorf_start} > {self.mainorf_end}")
+                self.mainorf_start, self.mainorf_end = self.mainorf_end, self.mainorf_start
+        
+        # For negative strand, we might need the opposite ordering in some cases
+        # but this depends on the specific use case and is handled elsewhere if needed
 
     def _convert_to_transcript_coords(self, genomic_pos: int) -> Optional[int]:
-        """Convert genomic position to transcript coordinates."""
+        """
+        Convert genomic position to transcript coordinates.
+        
+        Args:
+            genomic_pos: Genomic position to convert
+            
+        Returns:
+            Corresponding transcript position, or None if conversion fails
+        """
         if genomic_pos is None:
             return None
-        return self.genome_to_transcript.get(genomic_pos)
+            
+        # Get transcript position from mapping
+        transcript_pos = self.genome_to_transcript.get(genomic_pos)
+        
+        # Log debug info for extended transcripts
+        if transcript_pos is None:
+            logging.debug(f"No transcript position found for genomic position {genomic_pos} in transcript {self.transcript_id}")
+            
+            # For debugging purposes, show the range of valid genomic positions
+            if self.genome_to_transcript:
+                min_pos = min(self.genome_to_transcript.keys())
+                max_pos = max(self.genome_to_transcript.keys())
+                logging.debug(f"Valid genomic positions range: {min_pos}-{max_pos}")
+        
+        return transcript_pos
 
-    def _build_coordinate_maps(self):
-        """Build mappings between genomic and transcript coordinates."""
-        if self.strand == '+':
-            transcript_pos = 1  # Start counting from 1
+    def _rebuild_coordinates_for_transcript(self):
+        """
+        Rebuild the coordinate map for the entire transcript, ensuring
+        consistent 5' to 3' ordering in transcript coordinates.
+        This method replaces _build_coordinate_maps and handles extension.
+        """
+        # Start fresh
+        self.genome_to_transcript = {}
+        self.transcript_to_genome = {}
+        
+        # Get all exons - we'll work with these directly
+        if not self.exons:
+            logging.warning(f"No exons defined for transcript {self.transcript_id}")
+            return
+        
+        # Sort exons by genomic position
+        sorted_exons = sorted(self.exons, key=lambda x: x.genome_start)
+        
+        # Check if uORF extends beyond transcript boundaries
+        needs_extension = False
+        min_transcript_pos = sorted_exons[0].genome_start
+        max_transcript_pos = sorted_exons[-1].genome_end
+        
+        # Define the full genomic range to include
+        start_pos = min_transcript_pos
+        end_pos = max_transcript_pos
+        
+        # Check if we need to extend to include uORF
+        if self.uorf_start_genomic and self.uorf_end_genomic:
+            uorf_min = min(self.uorf_start_genomic, self.uorf_end_genomic)
+            uorf_max = max(self.uorf_start_genomic, self.uorf_end_genomic)
             
-            for exon in self.exons:
-                offset = 0  # Keep track of position within current exon
-                for genome_pos in range(exon.genome_start, exon.genome_end + 1):
-                    # For first position in exon, use transcript_pos directly
-                    current_pos = transcript_pos + offset
-                    self.genome_to_transcript[genome_pos] = current_pos
-                    self.transcript_to_genome[current_pos] = genome_pos
-                    offset += 1
-                transcript_pos += offset
-        else:
-            # For negative strand, start from highest genomic coordinate
-            transcript_pos = 1
-            sorted_exons = sorted(self.exons, key=lambda x: x.genome_end, reverse=True)
-            
+            if uorf_min < start_pos:
+                start_pos = uorf_min
+                needs_extension = True
+                logging.info(f"Extending transcript {self.transcript_id} to include uORF start")
+                
+            if uorf_max > end_pos:
+                end_pos = uorf_max
+                needs_extension = True
+                logging.info(f"Extending transcript {self.transcript_id} to include uORF end")
+        
+        # For negative strand, we need to reverse the exon order for transcript coordinates
+        if self.strand == '-':
+            # For negative strand, transcript positions start at the 5' end
+            # This means we count from the highest genomic coordinate
+            exon_positions = []
             for exon in sorted_exons:
-                offset = 0
-                # Count positions from end to start for negative strand
-                for genome_pos in range(exon.genome_end, exon.genome_start - 1, -1):
-                    current_pos = transcript_pos + offset
-                    self.genome_to_transcript[genome_pos] = current_pos
-                    self.transcript_to_genome[current_pos] = genome_pos
-                    offset += 1
-                transcript_pos += offset
-
-    def _check_and_extend_for_uorf(self):
-        """
-        Check if uORF is outside of transcript boundaries and extend if necessary.
-        """
-        if self.uorf_start_genomic is None or self.uorf_end_genomic is None:
-            return
-        
-        # Check if genome_to_transcript is empty (no exons mapped)
-        if not self.genome_to_transcript:
-            logging.warning(f"Empty coordinate map for transcript {self.transcript_id}, cannot extend")
-            return
-        
-        # Check if uORF is outside transcript boundaries
-        if self.strand == '+':
-            # For positive strand
-            min_genome_pos = min(self.genome_to_transcript.keys())
-            max_genome_pos = max(self.genome_to_transcript.keys())
+                # Include only genomic ranges within exons (not introns)
+                exon_positions.extend(range(exon.genome_start, exon.genome_end + 1))
             
-            # Check if uORF start is before transcript start
-            if self.uorf_start_genomic < min_genome_pos:
-                logging.info(f"uORF starts before transcript {self.transcript_id} (pos: {self.uorf_start_genomic} < {min_genome_pos})")
-                self._extend_transcript_upstream(min_genome_pos, self.uorf_start_genomic)
+            # If we need to extend to include uORF
+            if needs_extension:
+                # Add extension at 5' end (higher genomic coordinates)
+                if end_pos > max_transcript_pos:
+                    extension_range = range(max_transcript_pos + 1, end_pos + 1)
+                    exon_positions.extend(extension_range)
+                    
+                # Add extension at 3' end (lower genomic coordinates)
+                if start_pos < min_transcript_pos:
+                    extension_range = range(start_pos, min_transcript_pos)
+                    exon_positions.extend(extension_range)
+            
+            # Now sort all positions in descending order (for negative strand)
+            # This ensures transcript positions increase from 5' to 3'
+            exon_positions.sort(reverse=True)
+            
+            # Assign transcript positions
+            transcript_pos = 1
+            for genome_pos in exon_positions:
+                self.genome_to_transcript[genome_pos] = transcript_pos
+                self.transcript_to_genome[transcript_pos] = genome_pos
+                transcript_pos += 1
                 
-            # Check if uORF end is after transcript end
-            if self.uorf_end_genomic > max_genome_pos:
-                logging.info(f"uORF ends after transcript {self.transcript_id} (pos: {self.uorf_end_genomic} > {max_genome_pos})")
-                self._extend_transcript_downstream(max_genome_pos, self.uorf_end_genomic)
-                
-        else:  # Negative strand
-            min_genome_pos = min(self.genome_to_transcript.keys())
-            max_genome_pos = max(self.genome_to_transcript.keys())
+        else:  # Positive strand
+            # For positive strand, transcript positions increase with genomic positions
+            exon_positions = []
+            for exon in sorted_exons:
+                # Include only genomic ranges within exons (not introns)
+                exon_positions.extend(range(exon.genome_start, exon.genome_end + 1))
             
-            # Check if uORF extends beyond the 5' end of transcript (greater than max_genome_pos)
-            if self.uorf_start_genomic > max_genome_pos or self.uorf_end_genomic > max_genome_pos:
-                extend_pos = max(self.uorf_start_genomic, self.uorf_end_genomic)
-                logging.info(f"Extending transcript {self.transcript_id} at 5' end (negative strand): {max_genome_pos} -> {extend_pos}")
-                self._extend_transcript_downstream(max_genome_pos, extend_pos)
-                
-            # Check if uORF extends beyond the 3' end of transcript (less than min_genome_pos)
-            if self.uorf_start_genomic < min_genome_pos or self.uorf_end_genomic < min_genome_pos:
-                extend_pos = min(self.uorf_start_genomic, self.uorf_end_genomic)
-                logging.info(f"Extending transcript {self.transcript_id} at 3' end (negative strand): {min_genome_pos} -> {extend_pos}")
-                self._extend_transcript_upstream(min_genome_pos, extend_pos)
+            # If we need to extend to include uORF
+            if needs_extension:
+                # Add extension at 5' end (lower genomic coordinates)
+                if start_pos < min_transcript_pos:
+                    extension_range = range(start_pos, min_transcript_pos)
+                    exon_positions.extend(extension_range)
+                    
+                # Add extension at 3' end (higher genomic coordinates)
+                if end_pos > max_transcript_pos:
+                    extension_range = range(max_transcript_pos + 1, end_pos + 1)
+                    exon_positions.extend(extension_range)
+            
+            # Sort all positions
+            exon_positions.sort()
+            
+            # Assign transcript positions
+            transcript_pos = 1
+            for genome_pos in exon_positions:
+                self.genome_to_transcript[genome_pos] = transcript_pos
+                self.transcript_to_genome[transcript_pos] = genome_pos
+                transcript_pos += 1
+        
+        self.was_extended = needs_extension
+        logging.info(f"Rebuilt coordinate map for transcript {self.transcript_id} ({self.strand} strand), "
+                    f"length: {len(self.genome_to_transcript)} bp, extended: {self.was_extended}")
 
-    def _extend_transcript_upstream(self, current_min_pos, new_min_pos):
-        """Extend transcript upstream (towards 5' end depending on strand)."""
-        # Ensure proper ordering
-        if new_min_pos > current_min_pos:
-            logging.warning(f"Cannot extend upstream, new position {new_min_pos} > current position {current_min_pos}")
-            return
-            
-        # Extension length
-        extension_length = current_min_pos - new_min_pos
-        
-        # Create temporary maps for the extension
-        new_genome_to_transcript = {}
-        new_transcript_to_genome = {}
-        
-        # Shift all existing transcript positions by extension length
-        for genome_pos, transcript_pos in self.genome_to_transcript.items():
-            new_genome_to_transcript[genome_pos] = transcript_pos + extension_length
-            
-        for transcript_pos, genome_pos in self.transcript_to_genome.items():
-            new_transcript_to_genome[transcript_pos + extension_length] = genome_pos
-        
-        # Add new mappings for extended region
-        for i in range(extension_length):
-            genome_pos = new_min_pos + i
-            transcript_pos = i + 1  # Start from 1 (1-based)
-            new_genome_to_transcript[genome_pos] = transcript_pos
-            new_transcript_to_genome[transcript_pos] = genome_pos
-        
-        # Update maps
-        self.genome_to_transcript = new_genome_to_transcript
-        self.transcript_to_genome = new_transcript_to_genome
-        
-        self.was_extended = True
-        logging.info(f"Extended transcript {self.transcript_id} upstream by {extension_length} bp")
-
-    def _extend_transcript_downstream(self, current_max_pos, new_max_pos):
-        """Extend transcript downstream (towards 3' end depending on strand)."""
-        # Ensure proper ordering
-        if new_max_pos < current_max_pos:
-            logging.warning(f"Cannot extend downstream, new position {new_max_pos} < current position {current_max_pos}")
-            return
-            
-        # Extension length
-        extension_length = new_max_pos - current_max_pos
-        
-        # Get the maximum transcript position
-        max_transcript_pos = max(self.transcript_to_genome.keys()) if self.transcript_to_genome else 0
-        
-        # Add new mappings for extended region
-        for i in range(extension_length):
-            genome_pos = current_max_pos + i + 1
-            transcript_pos = max_transcript_pos + i + 1
-            self.genome_to_transcript[genome_pos] = transcript_pos
-            self.transcript_to_genome[transcript_pos] = genome_pos
-        
-        self.was_extended = True
-        logging.info(f"Extended transcript {self.transcript_id} downstream by {extension_length} bp")
+        # After building coordinates, convert genomic to transcript coordinates
+        self._convert_genomic_to_transcript_coords()
 
     def get_coordinates(self, genomic_pos: int) -> Optional[Coordinates]:
-        """Get both genomic and transcript coordinates for a position."""
+        """Get both genomic and transcript coordinates for a position with detailed logging."""
         transcript_pos = self.genome_to_transcript.get(genomic_pos)
         if transcript_pos is not None:
+            logging.debug(f"Genomic pos {genomic_pos} -> Transcript pos {transcript_pos} "
+                        f"for {self.transcript_id} (strand {self.strand}, extended: {self.was_extended})")
             return Coordinates(genomic_pos, transcript_pos)
+        
+        logging.warning(f"Genomic position {genomic_pos} not found in coordinate map for "
+                      f"transcript {self.transcript_id} (ext: {self.was_extended})")
+                      
+        # For debugging, show the range of valid positions
+        if self.genome_to_transcript:
+            min_pos = min(self.genome_to_transcript.keys())
+            max_pos = max(self.genome_to_transcript.keys())
+            logging.warning(f"Valid genomic positions range: {min_pos}-{max_pos}")
+        
         return None
 
     def get_genomic_position(self, transcript_pos: int) -> Optional[int]:

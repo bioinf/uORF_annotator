@@ -34,13 +34,15 @@ class Pipeline:
             if (i >= 0 and i % 1000 == 0) or (i == total_rows - 1):
                 logging.info(f"Processed {i}/{total_rows} variants")
 
-            result = self.processor.process_variant(intersected.iloc[i])
-            if result:
-                results.append(result)
+            # Process variant now returns a list of results for all variant-uORF pairs
+            variant_results = self.processor.process_variant(intersected.iloc[i])
+            if variant_results:
+                # Add all results instead of just the first one
+                results.extend(variant_results)
 
         results_df = pd.DataFrame(results)
         
-        # Sort results by chromosome and position
+        # Sort results by chromosome and position (removed uORF_ID from sorting)
         if not results_df.empty:
             results_df = results_df.sort_values(['Chromosome', 'Original_Genome_Position'])
         
@@ -85,7 +87,7 @@ def main():
         if not results.empty:
             results.to_csv(args.output, sep='\t', index=False)
             logging.info(f"Results successfully saved to {args.output}")
-            logging.info(f"Total variants processed: {len(results)}")
+            logging.info(f"Total variant-uORF pairs processed: {len(results)}")
         else:
             logging.warning("No variants were processed successfully.")
         
