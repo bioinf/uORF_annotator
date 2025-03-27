@@ -52,6 +52,7 @@ class VariantAnnotator:
         """Initialize with TranscriptSequence object instead of raw sequence."""
         self.transcript_seq = transcript_sequence
         self._initialize_impact_rules()
+        self.debug_mode = True  # Включаем отладочный режим
 
     def _initialize_impact_rules(self):
         """Initialize rule-based system for impact prediction."""
@@ -110,7 +111,30 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.STOP_LOST)
+        # Подробная отладка
+        if self.debug_mode:
+            logging.info(f"*** STOP_LOST DEBUG INFO ***")
+            logging.info(f"Variant position: {variant_data['position']}")
+            logging.info(f"uORF coordinates: {variant_data['uorf_start']}-{variant_data['uorf_end']} (transcript)")
+            logging.info(f"mainCDS coordinates: {variant_data['maincds_start']}-{variant_data['maincds_end']} (transcript)")
+            logging.info(f"Original overlaps_maincds: {overlaps_maincds}")
+        
+        # Вызываем усовершенствованный метод для поиска нового стоп-кодона
+        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.STOP_LOST)
+        
+        if self.debug_mode:
+            if new_stop_pos is not None:
+                logging.info(f"New stop codon found at transcript position: {new_stop_pos}")
+                logging.info(f"Stop codon: {stop_codon_info['codon']} at genomic position {stop_codon_info.get('genomic_pos', 'N/A')}")
+                logging.info(f"Frame: {stop_codon_info['frame']}")
+                
+                # Проверяем отношение к mainCDS
+                if new_stop_pos < variant_data['maincds_start']:
+                    logging.info(f"New stop is BEFORE mainCDS start")
+                elif new_stop_pos > variant_data['maincds_start']:
+                    logging.info(f"New stop is AFTER mainCDS start")
+            else:
+                logging.info(f"No new stop codon found")
         
         if overlaps_maincds:
             if new_stop_pos is None:
@@ -124,15 +148,27 @@ class VariantAnnotator:
                 return MainCDSImpact.OVERLAP_TRUNCATION
         
         if new_stop_pos is None:
-            return MainCDSImpact.MAIN_CDS_UNAFFECTED
+            # Если новый стоп-кодон не найден, мы предполагаем, что трансляция может продолжиться
+            # до конца транскрипта, что с большой вероятностью затронет mainCDS
+            if self.debug_mode:
+                logging.info(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
+            return MainCDSImpact.OUT_OF_FRAME_OVERLAP
             
-        if new_stop_pos < variant_data['maincds_start']:
+        # Ключевое условие: если новый стоп-кодон ПОСЛЕ начала mainCDS
+        if new_stop_pos >= variant_data['maincds_start']:
+            if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
+                if self.debug_mode:
+                    logging.info(f"New stop extends directly into mainCDS, N_TERMINAL_EXTENSION")
+                return MainCDSImpact.N_TERMINAL_EXTENSION
+            else:
+                if self.debug_mode:
+                    logging.info(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
+                return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+        else:
+            # Новый стоп находится до начала mainCDS
+            if self.debug_mode:
+                logging.info(f"New stop before mainCDS, UORF_PRODUCT_TRUNCATION")
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
-        
-        if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
-            return MainCDSImpact.N_TERMINAL_EXTENSION
-            
-        return MainCDSImpact.OUT_OF_FRAME_OVERLAP
 
     def _handle_frameshift(self, variant_data: Dict) -> MainCDSImpact:
         """Handle frameshift variants."""
@@ -140,7 +176,7 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        # For the specific A>AT case we know is problematic, force a truncation
+        # Для специфического случая A>AT, который вызывает проблемы
         position = variant_data['position']
         ref_allele = variant_data.get('ref_allele', '')
         alt_allele = variant_data.get('alt_allele', '')
@@ -148,7 +184,8 @@ class VariantAnnotator:
         if position == 10 and ref_allele == 'A' and alt_allele == 'AT':
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
         
-        new_stop_pos = self._find_new_stop_codon_position(variant_data, UORFConsequence.FRAMESHIFT)
+        # Используем усовершенствованный метод поиска стоп-кодона
+        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.FRAMESHIFT)
         
         if new_stop_pos is None:
             new_stop_pos = variant_data['maincds_end']
@@ -204,62 +241,112 @@ class VariantAnnotator:
         """Handle non-coding variants."""
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
-    def _find_new_stop_codon_position(self, variant_data: Dict, 
-                                     uorf_consequence: UORFConsequence) -> Optional[int]:
-        """Find the position of the new stop codon after a frameshift or stop loss variant."""
+    def _find_new_stop_codon_position_enhanced(self, variant_data: Dict, 
+                                             uorf_consequence: UORFConsequence) -> Tuple[Optional[int], Optional[Dict]]:
+        """
+        Улучшенная версия метода для поиска нового стоп-кодона с подробной отладкой.
+        Возвращает позицию нового стоп-кодона и информацию о нём.
+        """
         try:
             transcript_pos = variant_data['position']
             uorf_start = variant_data['uorf_start']
             uorf_end = variant_data['uorf_end']
             maincds_end = variant_data.get('maincds_end')
             
-            # Determine where to start scanning for a new stop codon
-            if uorf_consequence == UORFConsequence.STOP_LOST:
-                scan_start_pos = uorf_end  # Start scanning from the end of uORF
-            elif uorf_consequence == UORFConsequence.FRAMESHIFT:
-                scan_start_pos = transcript_pos  # Start scanning from the variant position
-            else:
-                return None
+            # Отладочная информация
+            if self.debug_mode:
+                logging.info(f"Finding new stop codon for {uorf_consequence.name}")
+                logging.info(f"Variant position: {transcript_pos}")
+                logging.info(f"uORF coordinates: {uorf_start}-{uorf_end}")
+                if maincds_end:
+                    logging.info(f"mainCDS end: {maincds_end}")
             
-            # Get sequence from scan start to end of transcript
+            # Определяем, откуда начинать сканирование
+            if uorf_consequence == UORFConsequence.STOP_LOST:
+                # Для потери стоп-кодона начинаем с позиции стоп-кодона (а не после него)
+                scan_start_pos = uorf_end - 2  # Стоп-кодон длиной 3 нуклеотида
+                if self.debug_mode:
+                    logging.info(f"Scanning from the stop codon position: {scan_start_pos}")
+            elif uorf_consequence == UORFConsequence.FRAMESHIFT:
+                scan_start_pos = transcript_pos
+                if self.debug_mode:
+                    logging.info(f"Scanning from variant position: {scan_start_pos}")
+            else:
+                return None, None
+            
+            # Получаем последовательность от начала сканирования до конца транскрипта
             sequence = self._get_sequence_from_position(scan_start_pos)
             if not sequence:
-                return None
+                if self.debug_mode:
+                    logging.info("No sequence retrieved for scanning")
+                return None, None
             
-            # Calculate the relative position and reading frame
+            if self.debug_mode:
+                logging.info(f"Scanning sequence: {sequence[:50]}... (length: {len(sequence)})")
+            
+            # Вычисляем относительную позицию в uORF и рамку считывания
             rel_pos = transcript_pos - uorf_start
-            frame = rel_pos % 3
-                
-            # For frameshift, we need to adjust the frame
+            original_frame = rel_pos % 3
+            
+            # Для frameshift нужно скорректировать рамку
             if uorf_consequence == UORFConsequence.FRAMESHIFT:
-                # Calculate the frameshift amount (length difference between ref and alt alleles)
+                # Вычисляем величину сдвига рамки (разница в длине между ref и alt)
                 ref_allele = variant_data.get('ref_allele', '')
                 alt_allele = variant_data.get('alt_allele', '')
                 if not ref_allele or not alt_allele:
-                    return None
+                    return None, None
                     
-                # Use actual length difference for frame calculation
+                # Используем реальную разницу в длине для вычисления сдвига рамки
                 shift_amount = (len(alt_allele) - len(ref_allele)) % 3
-                if shift_amount == 0:  # No real frameshift effect
-                    return None
+                if shift_amount == 0:  # Нет реального эффекта сдвига рамки
+                    return None, None
                     
-                # Adjust the frame based on the shift amount
-                frame = (frame + shift_amount) % 3
+                # Корректируем рамку с учётом сдвига
+                frame = (original_frame + shift_amount) % 3
+            else:
+                # Для STOP_LOST нам нужно определить рамку стоп-кодона
+                # Стоп-кодон должен быть в той же рамке, что и начало uORF
+                if uorf_consequence == UORFConsequence.STOP_LOST:
+                    # Определяем смещение от начала uORF до стоп-кодона
+                    stop_dist = uorf_end - uorf_start
+                    frame = stop_dist % 3
+                    
+                    # Если последний нуклеотид стоп-кодона на позиции uorf_end,
+                    # то первый нуклеотид должен быть на uorf_end - 2
+                    scan_offset = (uorf_end - scan_start_pos) % 3
+                    
+                    # Определяем начальное смещение для поиска в рамке
+                    frame = (3 - scan_offset) % 3
+                else:
+                    frame = original_frame
             
-            # Find the next in-frame stop codon
-            new_stop_pos = self._find_next_stop_codon(sequence, frame)
-            if new_stop_pos is None:
-                # If no stop codon found, use mainCDS end as approximation
-                if maincds_end is not None:
-                    return maincds_end
-                return None
+            if self.debug_mode:
+                logging.info(f"Original frame: {original_frame}")
+                logging.info(f"Scanning in frame: {frame}")
+            
+            # Ищем следующий стоп-кодон в указанной рамке
+            stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, frame)
+            if stop_pos is None:
+                if self.debug_mode:
+                    logging.info("No new stop codon found in sequence")
+                return None, None
                     
-            # Convert relative position to transcript position
-            return scan_start_pos + new_stop_pos
+            # Пересчитываем относительную позицию в абсолютную позицию в транскрипте
+            absolute_stop_pos = scan_start_pos + stop_pos + 2  # +2 к позиции первого нуклеотида стоп-кодона
+            
+            if self.debug_mode:
+                logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
+                logging.info(f"Absolute transcript position: {absolute_stop_pos}")
+                logging.info(f"Stop codon: {stop_info['codon']}")
+            
+            # Добавляем абсолютную позицию в результат
+            stop_info['transcript_pos'] = absolute_stop_pos
+            
+            return absolute_stop_pos, stop_info
             
         except Exception as e:
             logging.error(f"Error finding new stop codon: {str(e)}")
-            return None
+            return None, None
             
     def _get_sequence_from_position(self, start_pos: int) -> str:
         """Get the sequence from the given position to the end of the transcript."""
@@ -268,8 +355,9 @@ class VariantAnnotator:
             if not full_sequence:
                 return ""
                 
-            start_index = start_pos - 1
+            start_index = start_pos - 1  # Convert 1-based to 0-based
             if start_index < 0 or start_index >= len(full_sequence):
+                logging.error(f"Start index {start_index} is out of bounds (0-{len(full_sequence)-1})")
                 return ""
                 
             return full_sequence[start_index:]
@@ -277,25 +365,44 @@ class VariantAnnotator:
             logging.error(f"Error getting sequence from position: {str(e)}")
             return ""
             
-    def _find_next_stop_codon(self, sequence: str, frame: int) -> Optional[int]:
-        """Find the position of the next in-frame stop codon in the sequence."""
+    def _find_next_stop_codon_enhanced(self, sequence: str, frame: int) -> Tuple[Optional[int], Optional[Dict]]:
+        """Enhanced version of finding the next in-frame stop codon with detailed info."""
         try:
             if not sequence or frame not in (0, 1, 2):
-                return None
+                return None, None
                 
             # Adjust the starting point based on the frame
             start = frame
             
+            if self.debug_mode:
+                logging.info(f"Looking for stop codons starting at offset {start} with frame {frame}")
+            
             # Scan the sequence for stop codons in the specified frame
             for i in range(start, len(sequence) - 2, 3):
                 codon = sequence[i:i+3].upper()
+                
+                if self.debug_mode and i < 60:  # Debug только для первых 20 кодонов
+                    logging.info(f"Checking codon at position {i}: {codon}")
+                
                 if codon in self.STOP_CODONS:
-                    return i
+                    if self.debug_mode:
+                        logging.info(f"Found stop codon {codon} at position {i}")
                     
-            return None
+                    # Возвращаем позицию и информацию о стоп-кодоне
+                    stop_info = {
+                        'codon': codon,
+                        'position': i,
+                        'frame': frame
+                    }
+                    return i, stop_info
+                    
+            if self.debug_mode:
+                logging.info(f"No stop codon found in the sequence")
+                
+            return None, None
         except Exception as e:
             logging.error(f"Error finding next stop codon: {str(e)}")
-            return None
+            return None, None
 
     def get_codon_change(self, variant_data: Dict) -> str:
         """Get codon change string for the variant, assuming sequence is already correctly oriented."""

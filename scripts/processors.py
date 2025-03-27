@@ -281,8 +281,186 @@ class VariantProcessor:
                     
                     # Add this position to processed positions so we don't process it again in extended transcripts
                     processed_positions.add(variant_coords.transcript)
+                
+                # If no results from regular transcripts, try extended transcripts
+                if not results and extended_transcripts:
+                    logging.debug("No results from regular transcripts, trying extended transcripts")
                     
-                # Similar processing for extended transcripts (not included for brevity)
+                    for transcript_id in extended_transcripts:
+                        logging.debug(f"Processing extended transcript-uORF: {transcript_id}")
+                        
+                        transcript_obj = self.converter.transcripts[transcript_id]
+                        
+                        # Create a unique identifier for this uORF based on genomic coordinates
+                        uorf_key = self._create_uorf_key(transcript_obj)
+                        
+                        # Skip if we've already processed this uORF
+                        if uorf_key in self._processed_uorfs:
+                            logging.debug(f"Skipping already processed uORF: {uorf_key}")
+                            continue
+                            
+                        # Mark this uORF as processed
+                        self._processed_uorfs[uorf_key] = True
+                        
+                        # Log debug information
+                        self._log_debug_info(transcript_id, transcript_obj, vcf_pos)
+                        
+                        # Check if the variant is actually within the uORF genomic coordinates
+                        if (transcript_obj.uorf_start_genomic is not None and 
+                            transcript_obj.uorf_end_genomic is not None):
+                            
+                            # For positive strand, check if position is within uORF boundaries
+                            if transcript_obj.strand == '+':
+                                is_within_uorf = (vcf_pos >= transcript_obj.uorf_start_genomic and 
+                                               vcf_pos <= transcript_obj.uorf_end_genomic)
+                            # For negative strand, need to handle possible swapped coordinates
+                            else:
+                                uorf_min = min(transcript_obj.uorf_start_genomic, transcript_obj.uorf_end_genomic)
+                                uorf_max = max(transcript_obj.uorf_start_genomic, transcript_obj.uorf_end_genomic)
+                                is_within_uorf = (vcf_pos >= uorf_min and vcf_pos <= uorf_max)
+                            
+                            if not is_within_uorf:
+                                logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
+                                           f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
+                                           f"for extended transcript {transcript_id}, skipping")
+                                continue  # Skip to next transcript
+                        
+                        # Get transcript position for the variant
+                        variant_coords = transcript_obj.get_coordinates(vcf_pos)
+                        if not variant_coords:
+                            logging.debug(f"Position {vcf_pos} not in extended transcript coordinates for {transcript_id}, skipping")
+                            continue  # Skip to next transcript
+                        
+                        # Check if this position was already processed in a regular transcript
+                        if variant_coords.transcript in processed_positions:
+                            logging.debug(f"Position {variant_coords.transcript} already processed in regular transcript, skipping")
+                            continue
+                            
+                        # Check if uORF coordinates are still missing after potential extension
+                        if transcript_obj.uorf_start is None or transcript_obj.uorf_end is None:
+                            logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
+                            continue  # Skip to next transcript
+
+                        # Handle variant alleles based on strand
+                        # For negative strand, we need to reverse-complement the ref and alt alleles
+                        variant_ref = ref_allele
+                        variant_alt = alt_allele
+                        
+                        if transcript_obj.strand == '-':
+                            # Use the TranscriptSequence's reverse complement method
+                            variant_ref = TranscriptSequence._reverse_complement(ref_allele)
+                            variant_alt = TranscriptSequence._reverse_complement(alt_allele)
+                            logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
+                            
+                        # Create TranscriptSequence object
+                        transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
+                        if not transcript_seq.sequence:
+                            logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
+                            continue
+                            
+                        # Check if uORF region was extracted successfully
+                        if not transcript_seq.uorf_region:
+                            logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
+                            continue
+                            
+                        # Initialize annotator with TranscriptSequence
+                        self.annotator = VariantAnnotator(transcript_seq)
+
+                        # Get pre-determined overlap status from the Transcript object
+                        overlaps_maincds = getattr(transcript_obj, 'overlaps_maincds', False)
+                        logging.debug(f"Using pre-determined overlap status for {transcript_id}: {overlaps_maincds}")
+
+                        # Get codon change
+                        codon_change = self.annotator.get_codon_change({
+                            'position': variant_coords.transcript,
+                            'ref_allele': variant_ref,
+                            'alt_allele': variant_alt
+                        })
+                            
+                        # Prepare variant data with all information
+                        variant_data = {
+                            'position': variant_coords.transcript,
+                            'ref_allele': variant_ref,
+                            'alt_allele': variant_alt,
+                            'strand': transcript_obj.strand,
+                            'uorf_start': transcript_obj.uorf_start,
+                            'uorf_end': transcript_obj.uorf_end,
+                            'maincds_start': transcript_obj.mainorf_start,
+                            'maincds_end': transcript_obj.mainorf_end,
+                            'uorf_start_genomic': transcript_obj.uorf_start_genomic,
+                            'uorf_end_genomic': transcript_obj.uorf_end_genomic,
+                            'maincds_start_genomic': transcript_obj.mainorf_start_genomic,
+                            'maincds_end_genomic': transcript_obj.mainorf_end_genomic,
+                            'codon_change': codon_change,
+                            'overlaps_maincds': overlaps_maincds,
+                            'transcript_extended': True  # This should always be true for extended transcripts
+                        }
+
+                        # Get consequences and impacts
+                        uorf_consequence = self.annotator.get_consequence(variant_data)
+                        maincds_impact = None
+                        if uorf_consequence:
+                            maincds_impact = self.annotator.predict_impact(variant_data, uorf_consequence)
+                        
+                        # Get corrected uORF coordinates that reflect biological reality
+                        uorf_start_transcript, uorf_end_transcript = self._get_corrected_uorf_coordinates(
+                            transcript_obj, transcript_seq
+                        )
+
+                        # Get corrected mainCDS coordinates
+                        maincds_start_transcript = transcript_obj.mainorf_start
+                        maincds_end_transcript = transcript_obj.mainorf_end
+
+                        # Final check and cleanup - ensure we have valid numerical values
+                        uorf_start_transcript = uorf_start_transcript if uorf_start_transcript is not None else -1
+                        uorf_end_transcript = uorf_end_transcript if uorf_end_transcript is not None else -1
+                        maincds_start_transcript = maincds_start_transcript if maincds_start_transcript is not None else -1
+                        maincds_end_transcript = maincds_end_transcript if maincds_end_transcript is not None else -1
+                            
+                        # Extract the original transcript ID if this is a derived uORF transcript
+                        display_transcript_id = original_transcript_id
+                        
+                        result = {
+                            'Chromosome': chrom,
+                            'Original_Genome_Position': vcf_pos,
+                            'RSID': rsid,
+                            'BED_Name': bed_full_name,
+                            'Transcript_Position': variant_coords.transcript,
+                            'Ref_Allele': ref_allele,  # Save original alleles for output
+                            'Alt_Allele': alt_allele,
+                            'Strand': transcript_obj.strand,
+                            'Transcript_ID': display_transcript_id,
+                            'uORF_Start_Genomic': transcript_obj.uorf_start_genomic,
+                            'uORF_End_Genomic': transcript_obj.uorf_end_genomic,
+                            'uORF_Start_Transcript': uorf_start_transcript,
+                            'uORF_End_Transcript': uorf_end_transcript,
+                            'mainCDS_Start_Genomic': transcript_obj.mainorf_start_genomic,
+                            'mainCDS_End_Genomic': transcript_obj.mainorf_end_genomic,
+                            'mainCDS_Start_Transcript': maincds_start_transcript,
+                            'mainCDS_End_Transcript': maincds_end_transcript,
+                            'Codon_Change': codon_change,
+                            'uORF_Consequence': uorf_consequence.value if uorf_consequence else 'None',
+                            'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
+                            'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
+                            'Transcript_Extended': 'Yes'  # Always mark extended transcripts
+                        }
+                        
+                        # Use a unique result identifier to avoid duplicates
+                        result_id = self._create_result_identifier(result)
+                        
+                        # Check if we already have this exact result
+                        is_duplicate = False
+                        for existing_result in results:
+                            existing_id = self._create_result_identifier(existing_result)
+                            if existing_id == result_id:
+                                is_duplicate = True
+                                break
+                                
+                        if not is_duplicate:
+                            results.append(result)
+                            logging.debug(f"Added result for extended transcript-uORF: {transcript_id}")
+                        else:
+                            logging.debug(f"Skipping duplicate result for extended transcript-uORF: {transcript_id}")
                     
             # Return all results
             return results
