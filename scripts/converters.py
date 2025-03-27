@@ -19,12 +19,26 @@ class CoordinateConverter:
         self.bed_file = bed_file
         self.gtf_file = gtf_file
         self.transcripts: Dict[str, Transcript] = {}
+        self.raw_bed_entries = {}  # Store the raw bed entries for overlap determination
+        
+        # Setup logging
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            force=True
+        )
+        
+        # Parse files
         self._parse_files()
 
     def _parse_files(self) -> None:
         """Parse both BED and GTF files to build transcript information."""
         gtf_data = self._parse_gtf()
         self._parse_bed(gtf_data)
+        
+        # Print summary of processed transcripts
+        logging.info(f"Processed {len(self.transcripts)} transcript-uORF pairs")
+        logging.info(f"Raw BED entries: {len(self.raw_bed_entries)}")
 
     def _parse_gtf(self) -> Dict:
         """Parse GTF file to extract CDS coordinates."""
@@ -74,68 +88,56 @@ class CoordinateConverter:
         """Parse BED file and create transcript objects."""
         bed_df = pd.read_csv(self.bed_file, sep='\t', header=None)
         
+        logging.info(f"BED file contains {len(bed_df)} entries")
+        
         # Create a dictionary to track which transcripts have been processed
         processed_transcripts = {}
         
-        # Store the raw bed entries for overlap determination
-        self.raw_bed_entries = {}
-        
         for _, bed_row in bed_df.iterrows():
             transcript_id = bed_row[3].split('|')[0].split('.')[0]
-            uorf_id = f"{transcript_id}_uorf_{len(processed_transcripts.get(transcript_id, []))+1}"
             
             # Store raw bed entry before any processing
             entry = {
                 'chromosome': bed_row[0],
                 'start': int(bed_row[1]),
                 'end': int(bed_row[2]),
+                'name': bed_row[3],
                 'strand': bed_row[5],
                 'transcript_id': transcript_id
             }
-            self.raw_bed_entries[uorf_id if transcript_id in processed_transcripts else transcript_id] = entry
+            
+            # Create a unique key for this uORF
+            uorf_id = f"{transcript_id}_uorf_{len(processed_transcripts.get(transcript_id, []))+1}"
+            
+            # Store raw bed entry with its own ID to preserve uniqueness
+            self.raw_bed_entries[uorf_id] = entry
             
             if transcript_id in gtf_data['exons']:
                 mainorf_coords = self._get_mainorf_coords(transcript_id, gtf_data['cds'])
+                
+                # Log what we're processing
+                logging.info(f"Processing BED row: {entry}")
+                logging.info(f"Creating transcript {uorf_id} with uORF at {entry['start']+1}-{entry['end']}")
 
-                # Check if we already created a transcript object for this transcript_id
-                if transcript_id in self.transcripts:
-                    # Get the existing transcript
-                    existing_transcript = self.transcripts[transcript_id]
-                    
-                    # Create a new transcript with the same properties but different uORF
-                    new_transcript = Transcript(
-                        transcript_id=uorf_id,  # Use unique ID for the new transcript-uORF pair
-                        chromosome=existing_transcript.chromosome,
-                        strand=existing_transcript.strand,
-                        exons=existing_transcript.exons.copy(),
-                        mainorf_start=existing_transcript.mainorf_start_genomic,
-                        mainorf_end=existing_transcript.mainorf_end_genomic,
-                        uorf_start=int(bed_row[1]) + 1,
-                        uorf_end=int(bed_row[2])
-                    )
-                    
-                    # Store the new transcript-uORF pair
-                    self.transcripts[uorf_id] = new_transcript
-                    
-                    # Track that we've processed this transcript
-                    if transcript_id not in processed_transcripts:
-                        processed_transcripts[transcript_id] = []
-                    processed_transcripts[transcript_id].append(uorf_id)
-                else:
-                    # Create the first transcript-uORF pair for this transcript_id
-                    self.transcripts[transcript_id] = Transcript(
-                        transcript_id=transcript_id,
-                        chromosome=bed_row[0],
-                        strand=bed_row[5],
-                        exons=gtf_data['exons'][transcript_id],
-                        mainorf_start=mainorf_coords[0],
-                        mainorf_end=mainorf_coords[1],
-                        uorf_start=int(bed_row[1]) + 1,
-                        uorf_end=int(bed_row[2])
-                    )
-                    
-                    # Track that we've processed this transcript
-                    processed_transcripts[transcript_id] = [transcript_id]
+                # Always create a new transcript with unique ID for each uORF
+                new_transcript = Transcript(
+                    transcript_id=uorf_id,
+                    chromosome=entry['chromosome'],
+                    strand=entry['strand'],
+                    exons=gtf_data['exons'][transcript_id].copy() if transcript_id in gtf_data['exons'] else [],
+                    mainorf_start=mainorf_coords[0],
+                    mainorf_end=mainorf_coords[1],
+                    uorf_start=int(bed_row[1]) + 1,  # BED is 0-based, convert to 1-based
+                    uorf_end=int(bed_row[2])
+                )
+                
+                # Store the new transcript
+                self.transcripts[uorf_id] = new_transcript
+                
+                # Track that we've processed this transcript
+                if transcript_id not in processed_transcripts:
+                    processed_transcripts[transcript_id] = []
+                processed_transcripts[transcript_id].append(uorf_id)
             else:
                 logging.warning(f"No exons found for transcript {transcript_id}")
 
@@ -150,12 +152,14 @@ class CoordinateConverter:
     def _determine_overlaps(self):
         """
         Determine which uORFs overlap with mainCDS based on raw genomic coordinates
-        from the BED and GTF files, before any transcript extensions.
+        from the BED and GTF files.
         """
+        logging.info("Determining uORF-mainCDS overlaps...")
         for transcript_id, transcript in self.transcripts.items():
             # Get the raw entry
             raw_entry = self.raw_bed_entries.get(transcript_id)
             if not raw_entry:
+                logging.warning(f"No raw BED entry found for {transcript_id}")
                 continue
                 
             # A uORF and mainCDS overlap if:
@@ -169,7 +173,7 @@ class CoordinateConverter:
                 
                 if mainorf_start is not None:
                     transcript.overlaps_maincds = (uorf_end >= mainorf_start)
-                    logging.debug(f"Transcript {transcript_id}: uORF end={uorf_end}, mainCDS start={mainorf_start}, overlap={transcript.overlaps_maincds}")
+                    logging.info(f"Transcript {transcript_id}: uORF end={uorf_end}, mainCDS start={mainorf_start}, overlap={transcript.overlaps_maincds}")
             else:
                 # For - strand, coordinates might be swapped in the raw data
                 uorf_start = raw_entry['start'] + 1  # Adjust to 1-based
@@ -177,7 +181,7 @@ class CoordinateConverter:
                 
                 if mainorf_end is not None:
                     transcript.overlaps_maincds = (uorf_start <= mainorf_end)
-                    logging.debug(f"Transcript {transcript_id}: uORF start={uorf_start}, mainCDS end={mainorf_end}, overlap={transcript.overlaps_maincds}")
+                    logging.info(f"Transcript {transcript_id}: uORF start={uorf_start}, mainCDS end={mainorf_end}, overlap={transcript.overlaps_maincds}")
 
     def _get_mainorf_coords(self, transcript_id: str, cds_data: Dict) -> Tuple[int, int]:
         """Get main ORF coordinates for a transcript."""

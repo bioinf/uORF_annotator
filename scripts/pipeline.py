@@ -28,18 +28,63 @@ class Pipeline:
             return pd.DataFrame()
 
         results = []
-        total_rows = len(intersected)
+        # Keep track of which variants have been processed to avoid duplicates
+        processed_variants = set()
+        
+        # Group the intersection results by VCF positions
+        # This allows us to process each variant only once, considering all its BED overlaps
+        position_groups = {}
+        for idx, row in intersected.iterrows():
+            variant_key = f"{row['col0']}:{row['col1']}:{row['col3']}>{row['col4']}"
+            if variant_key not in position_groups:
+                position_groups[variant_key] = []
+            position_groups[variant_key].append(idx)
+        
+        logging.info(f"Found {len(position_groups)} unique variants after grouping")
 
-        for i in range(total_rows):
-            if (i >= 0 and i % 1000 == 0) or (i == total_rows - 1):
-                logging.info(f"Processed {i}/{total_rows} variants")
-
-            # Process variant now returns a list of results for all variant-uORF pairs
-            variant_results = self.processor.process_variant(intersected.iloc[i])
+        # Process each unique variant position
+        for variant_key, row_indices in position_groups.items():
+            chrom, pos, ref_alt = variant_key.split(':', 2)
+            logging.info(f"Processing variant {chrom}:{pos} {ref_alt}")
+            
+            # Collect all BED intersections for this variant
+            combined_row = None
+            bed_entries = []
+            
+            for idx in row_indices:
+                row = intersected.iloc[idx]
+                if combined_row is None:
+                    # Use the first row as the base
+                    combined_row = row.copy()
+                
+                # Store BED information
+                bed_entry = {
+                    'start': int(row['col9']),
+                    'end': int(row['col10']),
+                    'name': row['col11'],
+                    'strand': row['col13']
+                }
+                bed_entries.append(bed_entry)
+            
+            if combined_row is None:
+                logging.warning(f"No valid data found for variant {variant_key}")
+                continue
+                
+            # Create a marker for the processor to use all BED entries
+            combined_row['all_bed_entries'] = bed_entries
+            
+            # Process the combined variant information
+            variant_results = self.processor.process_variant(combined_row)
             if variant_results:
-                # Add all results instead of just the first one
+                # Add the results and mark this variant as processed
                 results.extend(variant_results)
+                processed_variants.add(variant_key)
+                logging.info(f"Added {len(variant_results)} results for {variant_key}")
+            else:
+                logging.warning(f"No results generated for {variant_key}")
 
+        logging.info(f"Processed {len(processed_variants)} unique variants, generated {len(results)} total results")
+        
         results_df = pd.DataFrame(results)
         
         # Sort results by chromosome and position (removed uORF_ID from sorting)
