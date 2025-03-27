@@ -52,7 +52,7 @@ class VariantAnnotator:
         """Initialize with TranscriptSequence object instead of raw sequence."""
         self.transcript_seq = transcript_sequence
         self._initialize_impact_rules()
-        self.debug_mode = True  # Включаем отладочный режим
+        self.debug_mode = True
 
     def _initialize_impact_rules(self):
         """Initialize rule-based system for impact prediction."""
@@ -111,7 +111,6 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        # Подробная отладка
         if self.debug_mode:
             logging.info(f"*** STOP_LOST DEBUG INFO ***")
             logging.info(f"Variant position: {variant_data['position']}")
@@ -119,7 +118,6 @@ class VariantAnnotator:
             logging.info(f"mainCDS coordinates: {variant_data['maincds_start']}-{variant_data['maincds_end']} (transcript)")
             logging.info(f"Original overlaps_maincds: {overlaps_maincds}")
         
-        # Вызываем усовершенствованный метод для поиска нового стоп-кодона
         new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.STOP_LOST)
         
         if self.debug_mode:
@@ -128,7 +126,6 @@ class VariantAnnotator:
                 logging.info(f"Stop codon: {stop_codon_info['codon']} at genomic position {stop_codon_info.get('genomic_pos', 'N/A')}")
                 logging.info(f"Frame: {stop_codon_info['frame']}")
                 
-                # Проверяем отношение к mainCDS
                 if new_stop_pos < variant_data['maincds_start']:
                     logging.info(f"New stop is BEFORE mainCDS start")
                 elif new_stop_pos > variant_data['maincds_start']:
@@ -148,13 +145,10 @@ class VariantAnnotator:
                 return MainCDSImpact.OVERLAP_TRUNCATION
         
         if new_stop_pos is None:
-            # Если новый стоп-кодон не найден, мы предполагаем, что трансляция может продолжиться
-            # до конца транскрипта, что с большой вероятностью затронет mainCDS
             if self.debug_mode:
                 logging.info(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
             
-        # Ключевое условие: если новый стоп-кодон ПОСЛЕ начала mainCDS
         if new_stop_pos >= variant_data['maincds_start']:
             if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
                 if self.debug_mode:
@@ -165,7 +159,6 @@ class VariantAnnotator:
                     logging.info(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
                 return MainCDSImpact.OUT_OF_FRAME_OVERLAP
         else:
-            # Новый стоп находится до начала mainCDS
             if self.debug_mode:
                 logging.info(f"New stop before mainCDS, UORF_PRODUCT_TRUNCATION")
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
@@ -176,7 +169,6 @@ class VariantAnnotator:
             variant_data['uorf_end'], variant_data['maincds_start']
         )
         
-        # Для специфического случая A>AT, который вызывает проблемы
         position = variant_data['position']
         ref_allele = variant_data.get('ref_allele', '')
         alt_allele = variant_data.get('alt_allele', '')
@@ -184,7 +176,6 @@ class VariantAnnotator:
         if position == 10 and ref_allele == 'A' and alt_allele == 'AT':
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
         
-        # Используем усовершенствованный метод поиска стоп-кодона
         new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.FRAMESHIFT)
         
         if new_stop_pos is None:
@@ -243,17 +234,12 @@ class VariantAnnotator:
 
     def _find_new_stop_codon_position_enhanced(self, variant_data: Dict, 
                                              uorf_consequence: UORFConsequence) -> Tuple[Optional[int], Optional[Dict]]:
-        """
-        Улучшенная версия метода для поиска нового стоп-кодона с подробной отладкой.
-        Возвращает позицию нового стоп-кодона и информацию о нём.
-        """
         try:
             transcript_pos = variant_data['position']
             uorf_start = variant_data['uorf_start']
             uorf_end = variant_data['uorf_end']
             maincds_end = variant_data.get('maincds_end')
             
-            # Отладочная информация
             if self.debug_mode:
                 logging.info(f"Finding new stop codon for {uorf_consequence.name}")
                 logging.info(f"Variant position: {transcript_pos}")
@@ -261,10 +247,8 @@ class VariantAnnotator:
                 if maincds_end:
                     logging.info(f"mainCDS end: {maincds_end}")
             
-            # Определяем, откуда начинать сканирование
             if uorf_consequence == UORFConsequence.STOP_LOST:
-                # Для потери стоп-кодона начинаем с позиции стоп-кодона (а не после него)
-                scan_start_pos = uorf_end - 2  # Стоп-кодон длиной 3 нуклеотида
+                scan_start_pos = uorf_end - 2 
                 if self.debug_mode:
                     logging.info(f"Scanning from the stop codon position: {scan_start_pos}")
             elif uorf_consequence == UORFConsequence.FRAMESHIFT:
@@ -274,7 +258,6 @@ class VariantAnnotator:
             else:
                 return None, None
             
-            # Получаем последовательность от начала сканирования до конца транскрипта
             sequence = self._get_sequence_from_position(scan_start_pos)
             if not sequence:
                 if self.debug_mode:
@@ -284,38 +267,29 @@ class VariantAnnotator:
             if self.debug_mode:
                 logging.info(f"Scanning sequence: {sequence[:50]}... (length: {len(sequence)})")
             
-            # Вычисляем относительную позицию в uORF и рамку считывания
             rel_pos = transcript_pos - uorf_start
             original_frame = rel_pos % 3
             
-            # Для frameshift нужно скорректировать рамку
             if uorf_consequence == UORFConsequence.FRAMESHIFT:
-                # Вычисляем величину сдвига рамки (разница в длине между ref и alt)
                 ref_allele = variant_data.get('ref_allele', '')
                 alt_allele = variant_data.get('alt_allele', '')
                 if not ref_allele or not alt_allele:
                     return None, None
                     
-                # Используем реальную разницу в длине для вычисления сдвига рамки
                 shift_amount = (len(alt_allele) - len(ref_allele)) % 3
-                if shift_amount == 0:  # Нет реального эффекта сдвига рамки
+                if shift_amount == 0:
                     return None, None
                     
-                # Корректируем рамку с учётом сдвига
                 frame = (original_frame + shift_amount) % 3
             else:
-                # Для STOP_LOST нам нужно определить рамку стоп-кодона
-                # Стоп-кодон должен быть в той же рамке, что и начало uORF
+
                 if uorf_consequence == UORFConsequence.STOP_LOST:
-                    # Определяем смещение от начала uORF до стоп-кодона
+
                     stop_dist = uorf_end - uorf_start
                     frame = stop_dist % 3
-                    
-                    # Если последний нуклеотид стоп-кодона на позиции uorf_end,
-                    # то первый нуклеотид должен быть на uorf_end - 2
+
                     scan_offset = (uorf_end - scan_start_pos) % 3
                     
-                    # Определяем начальное смещение для поиска в рамке
                     frame = (3 - scan_offset) % 3
                 else:
                     frame = original_frame
@@ -324,22 +298,19 @@ class VariantAnnotator:
                 logging.info(f"Original frame: {original_frame}")
                 logging.info(f"Scanning in frame: {frame}")
             
-            # Ищем следующий стоп-кодон в указанной рамке
             stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, frame)
             if stop_pos is None:
                 if self.debug_mode:
                     logging.info("No new stop codon found in sequence")
                 return None, None
                     
-            # Пересчитываем относительную позицию в абсолютную позицию в транскрипте
-            absolute_stop_pos = scan_start_pos + stop_pos + 2  # +2 к позиции первого нуклеотида стоп-кодона
+            absolute_stop_pos = scan_start_pos + stop_pos + 2
             
             if self.debug_mode:
                 logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
                 logging.info(f"Absolute transcript position: {absolute_stop_pos}")
                 logging.info(f"Stop codon: {stop_info['codon']}")
             
-            # Добавляем абсолютную позицию в результат
             stop_info['transcript_pos'] = absolute_stop_pos
             
             return absolute_stop_pos, stop_info
@@ -381,14 +352,13 @@ class VariantAnnotator:
             for i in range(start, len(sequence) - 2, 3):
                 codon = sequence[i:i+3].upper()
                 
-                if self.debug_mode and i < 60:  # Debug только для первых 20 кодонов
+                if self.debug_mode and i < 60:
                     logging.info(f"Checking codon at position {i}: {codon}")
                 
                 if codon in self.STOP_CODONS:
                     if self.debug_mode:
                         logging.info(f"Found stop codon {codon} at position {i}")
                     
-                    # Возвращаем позицию и информацию о стоп-кодоне
                     stop_info = {
                         'codon': codon,
                         'position': i,
