@@ -240,19 +240,32 @@ class VariantAnnotator:
 
     def _find_new_stop_codon_position_enhanced(self, variant_data: Dict, 
                                              uorf_consequence: UORFConsequence) -> Tuple[Optional[int], Optional[Dict]]:
+        """
+        Find the position of the next in-frame stop codon after a mutation.
+        Enhanced with more detailed logging to help debug codon discrepancies.
+        
+        Args:
+            variant_data: Dictionary with variant information
+            uorf_consequence: The consequence of the variant on the uORF
+            
+        Returns:
+            Tuple of (stop_position, stop_codon_info) or (None, None) if no stop found
+        """
         try:
             transcript_pos = variant_data['position']
             uorf_start = variant_data['uorf_start']
             uorf_end = variant_data['uorf_end']
             maincds_end = variant_data.get('maincds_end')
+            strand = variant_data.get('strand', self.transcript_seq.transcript.strand)
             
             if self.debug_mode:
                 logging.info(f"Finding new stop codon for {uorf_consequence.name}")
-                logging.info(f"Variant position: {transcript_pos}")
-                logging.info(f"uORF coordinates: {uorf_start}-{uorf_end}")
+                logging.info(f"Variant position: {transcript_pos}, strand: {strand}")
+                logging.info(f"uORF coordinates: {uorf_start}-{uorf_end} (transcript)")
                 if maincds_end:
-                    logging.info(f"mainCDS end: {maincds_end}")
+                    logging.info(f"mainCDS end: {maincds_end} (transcript)")
             
+            # Determine where to start scanning for a new stop codon
             if uorf_consequence == UORFConsequence.STOP_LOST:
                 scan_start_pos = uorf_end
                 if self.debug_mode:
@@ -262,8 +275,11 @@ class VariantAnnotator:
                 if self.debug_mode:
                     logging.info(f"Scanning from variant position: {scan_start_pos}")
             else:
+                if self.debug_mode:
+                    logging.info(f"Consequence {uorf_consequence.name} doesn't require stop codon scanning")
                 return None, None
             
+            # Get the sequence from scan position to end of transcript
             sequence = self._get_sequence_from_position(scan_start_pos)
             if not sequence:
                 if self.debug_mode:
@@ -271,52 +287,86 @@ class VariantAnnotator:
                 return None, None
             
             if self.debug_mode:
-                logging.info(f"Scanning sequence: {sequence[:50]}... (length: {len(sequence)})")
+                # Show first part of sequence to aid debugging
+                max_display = min(50, len(sequence))
+                logging.info(f"Scanning sequence: {sequence[:max_display]}... (length: {len(sequence)})")
             
+            # Calculate reading frame
             rel_pos = transcript_pos - uorf_start
             original_frame = rel_pos % 3
+            
+            if self.debug_mode:
+                logging.info(f"Original position relative to uORF start: {rel_pos}")
+                logging.info(f"Original reading frame: {original_frame}")
+            
+            # Determine frame for scanning based on variant consequence
+            frame = None
             
             if uorf_consequence == UORFConsequence.FRAMESHIFT:
                 ref_allele = variant_data.get('ref_allele', '')
                 alt_allele = variant_data.get('alt_allele', '')
+                
                 if not ref_allele or not alt_allele:
+                    if self.debug_mode:
+                        logging.info("Missing allele information for frameshift variant")
                     return None, None
                     
+                # Calculate the frame shift
                 shift_amount = (len(alt_allele) - len(ref_allele)) % 3
                 if shift_amount == 0:
+                    if self.debug_mode:
+                        logging.info("Frameshift with no net change in frame (multiple of 3)")
                     return None, None
                     
+                # New frame after the frameshift
                 frame = (original_frame + shift_amount) % 3
-            else:
-
-                if uorf_consequence == UORFConsequence.STOP_LOST:
-
-                    stop_dist = uorf_end - uorf_start
-                    frame = stop_dist % 3
-
-                    scan_offset = (uorf_end - scan_start_pos) % 3
+                
+                if self.debug_mode:
+                    logging.info(f"Frameshift variant: ref='{ref_allele}', alt='{alt_allele}'")
+                    logging.info(f"Shift amount: {shift_amount} nucleotides")
+                    logging.info(f"New reading frame after shift: {frame}")
                     
-                    frame = (3 - scan_offset) % 3
-                else:
-                    frame = original_frame
+            elif uorf_consequence == UORFConsequence.STOP_LOST:
+                # For stop loss, we need to determine the original stop codon's frame
+                stop_dist = uorf_end - uorf_start
+                orig_stop_frame = stop_dist % 3
+                
+                # Adjust for scanning position
+                scan_offset = (uorf_end - scan_start_pos) % 3
+                frame = (3 - scan_offset) % 3
+                
+                if self.debug_mode:
+                    logging.info(f"Stop loss: uORF length={stop_dist}, original stop frame={orig_stop_frame}")
+                    logging.info(f"Scan offset from uORF end: {scan_offset}")
+                    logging.info(f"Adjusted frame for scanning: {frame}")
+            else:
+                frame = original_frame
+                
+                if self.debug_mode:
+                    logging.info(f"Using original frame for scanning: {frame}")
             
-            if self.debug_mode:
-                logging.info(f"Original frame: {original_frame}")
-                logging.info(f"Scanning in frame: {frame}")
-            
+            # Find the next in-frame stop codon
             stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, frame)
             if stop_pos is None:
                 if self.debug_mode:
                     logging.info("No new stop codon found in sequence")
                 return None, None
                     
-            absolute_stop_pos = scan_start_pos + stop_pos + 2
+            # Calculate absolute transcript position
+            absolute_stop_pos = scan_start_pos + stop_pos + 2  # +2 for the full codon
             
             if self.debug_mode:
                 logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
                 logging.info(f"Absolute transcript position: {absolute_stop_pos}")
                 logging.info(f"Stop codon: {stop_info['codon']}")
+                
+                # Add genomic position if available
+                genomic_pos = self.transcript_seq.transcript.get_genomic_position(absolute_stop_pos)
+                if genomic_pos:
+                    stop_info['genomic_pos'] = genomic_pos
+                    logging.info(f"Genomic position of stop codon: {genomic_pos}")
             
+            # Store the transcript position in the stop info
             stop_info['transcript_pos'] = absolute_stop_pos
             
             return absolute_stop_pos, stop_info
@@ -343,9 +393,26 @@ class VariantAnnotator:
             return ""
             
     def _find_next_stop_codon_enhanced(self, sequence: str, frame: int) -> Tuple[Optional[int], Optional[Dict]]:
-        """Enhanced version of finding the next in-frame stop codon with detailed info."""
+        """
+        Enhanced version of finding the next in-frame stop codon with detailed info.
+        Improved with consistent logging to debug codon discrepancies.
+        
+        Args:
+            sequence: The DNA sequence to scan
+            frame: The reading frame (0, 1, or 2)
+            
+        Returns:
+            Tuple of (position, stop_codon_info) or (None, None) if no stop found
+        """
         try:
-            if not sequence or frame not in (0, 1, 2):
+            if not sequence:
+                if self.debug_mode:
+                    logging.info("Empty sequence provided for stop codon search")
+                return None, None
+                
+            if frame not in (0, 1, 2):
+                if self.debug_mode:
+                    logging.info(f"Invalid frame {frame} provided, must be 0, 1, or 2")
                 return None, None
                 
             # Adjust the starting point based on the frame
@@ -353,12 +420,17 @@ class VariantAnnotator:
             
             if self.debug_mode:
                 logging.info(f"Looking for stop codons starting at offset {start} with frame {frame}")
+                logging.info(f"Stop codons to search for: {', '.join(self.STOP_CODONS)}")
+            
+            found_codons = []  # For debugging, track all codons checked
             
             # Scan the sequence for stop codons in the specified frame
             for i in range(start, len(sequence) - 2, 3):
                 codon = sequence[i:i+3].upper()
                 
-                if self.debug_mode and i < 60:
+                # For debugging, track early codons
+                if i < 60 and self.debug_mode:
+                    found_codons.append(f"{i}:{codon}")
                     logging.info(f"Checking codon at position {i}: {codon}")
                 
                 if codon in self.STOP_CODONS:
@@ -371,17 +443,23 @@ class VariantAnnotator:
                         'frame': frame
                     }
                     return i, stop_info
-                    
+            
             if self.debug_mode:
+                if found_codons:
+                    logging.info(f"Examined codons: {', '.join(found_codons)}")
                 logging.info(f"No stop codon found in the sequence")
                 
             return None, None
+            
         except Exception as e:
             logging.error(f"Error finding next stop codon: {str(e)}")
             return None, None
 
     def get_codon_change(self, variant_data: Dict) -> str:
-        """Get codon change string for the variant, assuming sequence is already correctly oriented."""
+        """
+        Get codon change string for the variant, assuming sequence is already correctly oriented.
+        This method now logs all intermediate steps to help debug discrepancies between logs and results.
+        """
         try:
             required_fields = ['position', 'ref_allele', 'alt_allele']
             for field in required_fields:
@@ -392,35 +470,78 @@ class VariantAnnotator:
             ref = variant_data['ref_allele']
             alt = variant_data['alt_allele']
 
+            if self.debug_mode:
+                logging.debug(f"get_codon_change input: pos={pos}, ref={ref}, alt={alt}")
+
             if len(ref) != len(alt):
+                if self.debug_mode:
+                    logging.debug(f"Different allele lengths: ref={len(ref)}, alt={len(alt)}, returning NA")
                 return "NA"
 
             # Get the codon containing this position
             ref_codon = self.transcript_seq.get_codon_at_position(pos)
             if not ref_codon:
+                if self.debug_mode:
+                    logging.debug(f"Could not get reference codon at position {pos}, returning NA")
                 return "NA"
                     
             # Calculate position within codon
-            if pos < self.transcript_seq.transcript.uorf_start:
-                if abs(pos - self.transcript_seq.transcript.uorf_start) <= 3:
-                    pos_in_codon = pos - (self.transcript_seq.transcript.uorf_start - 3)
+            pos_in_codon = None
+            uorf_start = self.transcript_seq.transcript.uorf_start
+            uorf_end = self.transcript_seq.transcript.uorf_end
+            
+            if self.debug_mode:
+                logging.debug(f"uORF boundaries: start={uorf_start}, end={uorf_end}")
+                
+            if pos < uorf_start:
+                if abs(pos - uorf_start) <= 3:
+                    pos_in_codon = pos - (uorf_start - 3)
+                    if self.debug_mode:
+                        logging.debug(f"Position before uORF start: pos_in_codon={pos_in_codon}")
                 else:
+                    if self.debug_mode:
+                        logging.debug(f"Position too far before uORF start, returning NA")
                     return "NA"
-            elif pos > self.transcript_seq.transcript.uorf_end:
-                if abs(pos - self.transcript_seq.transcript.uorf_end) <= 3:
-                    pos_in_codon = 3 - (pos - self.transcript_seq.transcript.uorf_end)
+            elif pos > uorf_end:
+                if abs(pos - uorf_end) <= 3:
+                    pos_in_codon = 3 - (pos - uorf_end)
+                    if self.debug_mode:
+                        logging.debug(f"Position after uORF end: pos_in_codon={pos_in_codon}")
                 else:
+                    if self.debug_mode:
+                        logging.debug(f"Position too far after uORF end, returning NA")
                     return "NA"
             else:
-                rel_pos = pos - self.transcript_seq.transcript.uorf_start
+                rel_pos = pos - uorf_start
                 pos_in_codon = rel_pos % 3
+                if self.debug_mode:
+                    logging.debug(f"Position within uORF: rel_pos={rel_pos}, pos_in_codon={pos_in_codon}")
+
+            # Ensure pos_in_codon is valid (0, 1, or 2)
+            if pos_in_codon < 0 or pos_in_codon > 2:
+                if self.debug_mode:
+                    logging.debug(f"Invalid position in codon: {pos_in_codon}, adjusting...")
+                pos_in_codon = pos_in_codon % 3
+                
+            if self.debug_mode:
+                logging.debug(f"Using position in codon: {pos_in_codon}, ref_codon={ref_codon}")
 
             # Create alt codon by replacing the specific position
             alt_codon = list(ref_codon)
             alt_codon[pos_in_codon] = alt
             alt_codon = ''.join(alt_codon)
+            
+            codon_change = f"{ref_codon}>{alt_codon}"
+            
+            if self.debug_mode:
+                logging.debug(f"Final codon change: {codon_change}")
+                
+                # Check amino acid change for additional validation
+                ref_aa = self.CODON_TABLE.get(ref_codon, '?')
+                alt_aa = self.CODON_TABLE.get(alt_codon, '?')
+                logging.debug(f"Amino acid change: {ref_aa}>{alt_aa}")
 
-            return f"{ref_codon}>{alt_codon}"
+            return codon_change
 
         except Exception as e:
             logging.error(f"Error getting codon change: {str(e)}")

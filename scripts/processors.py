@@ -189,6 +189,24 @@ class VariantProcessor:
                         'ref_allele': variant_ref,
                         'alt_allele': variant_alt
                     })
+
+                    # Log detailed information about codon processing
+                    logging.debug(f"Codon processing details for {transcript_id}:")
+                    logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
+                    if transcript_obj.strand == '-':
+                        logging.debug(f"  Strand: negative, using reverse complement")
+                        logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
+                    else:
+                        logging.debug(f"  Strand: positive, using original alleles")
+                        logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
+                    logging.debug(f"  Computed codon change: {codon_change}")
+
+                    # Store the original alleles for result output, but also store the processed ones
+                    # for consistent reference
+                    original_ref = ref_allele
+                    original_alt = alt_allele
+                    processed_ref = variant_ref
+                    processed_alt = variant_alt
                         
                     # Prepare variant data with all information
                     variant_data = {
@@ -379,6 +397,24 @@ class VariantProcessor:
                             'ref_allele': variant_ref,
                             'alt_allele': variant_alt
                         })
+
+                        # Log detailed information about codon processing
+                        logging.debug(f"Codon processing details for {transcript_id}:")
+                        logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
+                        if transcript_obj.strand == '-':
+                            logging.debug(f"  Strand: negative, using reverse complement")
+                            logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
+                        else:
+                            logging.debug(f"  Strand: positive, using original alleles")
+                            logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
+                        logging.debug(f"  Computed codon change: {codon_change}")
+
+                        # Store the original alleles for result output, but also store the processed ones
+                        # for consistent reference
+                        original_ref = ref_allele
+                        original_alt = alt_allele
+                        processed_ref = variant_ref
+                        processed_alt = variant_alt
                             
                         # Prepare variant data with all information
                         variant_data = {
@@ -553,7 +589,7 @@ class VariantProcessor:
         if transcript_obj.uorf_start is None and transcript_obj.uorf_start_genomic is not None:
             logging.warning(f"uORF genomic coordinates exist but transcript coordinates are None for {transcript_id}")
             
-            # Show transcript boundaries
+        # Show transcript boundaries
             if transcript_obj.genome_to_transcript:
                 min_pos = min(transcript_obj.genome_to_transcript.keys())
                 max_pos = max(transcript_obj.genome_to_transcript.keys())

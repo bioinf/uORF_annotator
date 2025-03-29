@@ -236,6 +236,7 @@ class TranscriptSequence:
     def get_codon_at_position(self, transcript_pos):
         """
         Get codon at given transcript position, with correct handling for negative strand and extended transcripts.
+        Enhanced with improved logging to help debug codon discrepancies.
         
         Args:
             transcript_pos: Position in transcript coordinates
@@ -249,9 +250,10 @@ class TranscriptSequence:
             
         try:
             was_extended = getattr(self.transcript, 'was_extended', False)
+            strand = self.transcript.strand
             
             logging.debug(f"Getting codon at position {transcript_pos} for transcript {self.transcript.transcript_id}, "
-                        f"extended: {was_extended}")
+                        f"strand: {strand}, extended: {was_extended}")
             
             # Check if position is outside uORF boundaries
             near_start = abs(transcript_pos - self.transcript.uorf_start) <= 3
@@ -292,6 +294,19 @@ class TranscriptSequence:
                 return None
             
             codon = self.uorf_region[codon_start:codon_end]
+            
+            # Additional logging for codon information
+            logging.debug(f"Retrieved codon for transcript position {transcript_pos}:")
+            logging.debug(f"  Relative position in uORF: {rel_pos}")
+            logging.debug(f"  Frame: {frame}")
+            logging.debug(f"  Codon indices in uORF: {codon_start}-{codon_end}")
+            logging.debug(f"  Codon: {codon}")
+            
+            # If dealing with negative strand, note that sequence is already reverse complemented
+            if strand == '-':
+                logging.debug(f"  Note: For negative strand, sequence is already reverse complemented")
+                logging.debug(f"  This codon represents 5' to 3' orientation on the transcript")
+            
             return codon
                 
         except Exception as e:
