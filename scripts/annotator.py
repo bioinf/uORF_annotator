@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Optional, Tuple
 from enum import Enum
-
+from models import Transcript
 
 class UORFConsequence(Enum):
     START_LOST = "uorf_start_lost"
@@ -18,6 +18,7 @@ class MainCDSImpact(Enum):
     N_TERMINAL_EXTENSION = "n_terminal_extension"
     OUT_OF_FRAME_OVERLAP = "out_of_frame_overlap"
     UORF_PRODUCT_TRUNCATION = "uorf_product_truncation"
+    UORF_PRODUCT_EXTENSION = "uorf_product_extension"
     STOP_GAINED = "stop_gained"
     OVERLAP_EXTENSION = "overlap_extension"
     OVERLAP_TRUNCATION = "overlap_truncation"
@@ -48,11 +49,13 @@ class VariantAnnotator:
     START_CODONS = {'ATG'}
     STOP_CODONS = {'TAA', 'TAG', 'TGA'}
 
-    def __init__(self, transcript_sequence):
+    def __init__(self, transcript_sequence, transcript_obj : Transcript, bed_file_path = None):
         """Initialize with TranscriptSequence object instead of raw sequence."""
         self.transcript_seq = transcript_sequence
+        self.transcript_obj = transcript_obj
         self._initialize_impact_rules()
         self.debug_mode = True
+        self.bed_file_path = "testoutput.bed" # bed_file_path
 
     def _initialize_impact_rules(self):
         """Initialize rule-based system for impact prediction."""
@@ -119,7 +122,7 @@ class VariantAnnotator:
             logging.info(f"Original overlaps_maincds: {overlaps_maincds}")
         
         new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.STOP_LOST)
-        
+
         if self.debug_mode:
             if new_stop_pos is not None:
                 logging.info(f"New stop codon found at transcript position: {new_stop_pos}")
@@ -147,21 +150,24 @@ class VariantAnnotator:
         if new_stop_pos is None:
             if self.debug_mode:
                 logging.info(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
+            self._write_bed_entry(len(self.transcript_seq.sequence), variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
             
         if new_stop_pos >= variant_data['maincds_start']:
             if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
                 if self.debug_mode:
                     logging.info(f"New stop extends directly into mainCDS, N_TERMINAL_EXTENSION")
+                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION)
                 return MainCDSImpact.N_TERMINAL_EXTENSION
             else:
                 if self.debug_mode:
                     logging.info(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
+                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
                 return MainCDSImpact.OUT_OF_FRAME_OVERLAP
         else:
             if self.debug_mode:
                 logging.info(f"New stop before mainCDS, UORF_PRODUCT_TRUNCATION")
-            return MainCDSImpact.UORF_PRODUCT_TRUNCATION
+            return MainCDSImpact.UORF_PRODUCT_EXTENSION
 
     def _handle_frameshift(self, variant_data: Dict) -> MainCDSImpact:
         """Handle frameshift variants."""
@@ -248,7 +254,7 @@ class VariantAnnotator:
                     logging.info(f"mainCDS end: {maincds_end}")
             
             if uorf_consequence == UORFConsequence.STOP_LOST:
-                scan_start_pos = uorf_end - 2 
+                scan_start_pos = uorf_end
                 if self.debug_mode:
                     logging.info(f"Scanning from the stop codon position: {scan_start_pos}")
             elif uorf_consequence == UORFConsequence.FRAMESHIFT:
@@ -490,3 +496,114 @@ class VariantAnnotator:
     def _is_synonymous(self, ref_codon: str, alt_codon: str) -> bool:
         """Check if amino acid change is synonymous."""
         return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
+
+    # NEW: created by Yury 28-Mar-2025
+    def _write_bed_entry(self, new_stop_pos : int,
+                         variant_data : Dict,
+                         main_cds_eff : MainCDSImpact):
+        if self.debug_mode:
+            logging.info('Entered BED generation function!')
+            logging.info(f'Strand is {self.transcript_obj.strand}')
+        if self.bed_file_path is None:
+            if self.debug_mode:
+                logging.info('BED file path is not set, skipping')
+            pass
+        else:
+            # new_stop_pos += 1
+            chrom = variant_data['chromosome']
+            uorf_start = variant_data['uorf_start']
+            uorf_start_genomic = variant_data['uorf_start_genomic']
+            uorf_end_genomic = variant_data['uorf_end_genomic']
+            full_uorf_name = variant_data['full_uorf_name']
+            rsid = variant_data['rsid']
+            feature_name = f'{rsid}|{main_cds_eff.name}|{full_uorf_name}'
+
+            transcript_exons = self.transcript_obj.exons
+            final_genomic_start = None
+            final_genomic_end = None
+
+            if self.transcript_obj.strand == "+":
+                final_genomic_start = uorf_start_genomic
+            else:
+                final_genomic_end = uorf_end_genomic
+            final_block_sizes, genomic_block_starts = [], []
+            current_exon_start = 1
+
+            for exon_number, current_exon in enumerate(transcript_exons):
+                current_exon_end = (current_exon_start + current_exon.length)
+                if self.debug_mode:
+                    logging.info(f"Processing exon with coordinates {current_exon_start}-{current_exon_end}, searching for stop codon at {new_stop_pos}. uORF start is at {uorf_start}")
+
+                # Correction for uORFs starting before transcript start
+                # TODO: ideally, this step has to be performed at transcript extension
+                if exon_number == 0:
+
+                    if self.debug_mode:
+                        logging.info("Normalizing coordinates for the first exon (if necessary)")
+
+                    if (self.transcript_obj.strand == "+") and (uorf_start_genomic < current_exon.genome_start):
+                        current_exon.length += (current_exon.genome_start - uorf_start_genomic)
+                        current_exon.genome_start = uorf_start_genomic
+                    if (self.transcript_obj.strand == "-") and (uorf_end_genomic > current_exon.genome_end):
+                        current_exon.length += (uorf_end_genomic - current_exon.genome_end)
+                        current_exon.genome_end = uorf_end_genomic
+
+                # Skip exons before uORF start
+                if uorf_start > current_exon_end:
+                    continue
+
+                # If uORF starts in the current exon, calculate the offset (uORF start relative to exon)
+                uorf_start_offset = 0
+                if uorf_start >= current_exon_start:
+                    uorf_start_offset = (uorf_start - current_exon_start)
+
+                if new_stop_pos <= current_exon_end:
+                    # If the stop codon is in the exon, calculate its position and block size (including offset)
+                    if self.debug_mode:
+                        logging.info("Current exon contains stop codon, calculating final size and margins")
+
+                    if self.transcript_obj.strand == "+":
+                        final_genomic_end = current_exon.genome_start + (new_stop_pos - current_exon_start)
+                        genomic_block_starts.append(current_exon.genome_start + uorf_start_offset)
+                    else:
+                        final_genomic_start = current_exon.genome_end - (new_stop_pos - current_exon_start)
+                        genomic_block_starts.append(final_genomic_start)
+                    final_block_sizes.append(new_stop_pos - uorf_start_offset - current_exon_start + 1)
+                else:
+                    # If stop codon is not in the exon, store its start and length with offset correction
+                    genomic_block_starts.append(current_exon.genome_start + uorf_start_offset)
+                    final_block_sizes.append(current_exon.length - uorf_start_offset)
+                current_exon_start += current_exon.length
+
+            # If stop codon was not found, fill the margin with last exon boundary
+            if final_genomic_start is None:
+                final_genomic_start = current_exon.genome_start
+            if final_genomic_end is None:
+                final_genomic_end = current_exon.genome_end
+
+            if self.debug_mode:
+                logging.info(f"Collected block data: {final_block_sizes}; {genomic_block_starts}")
+
+            # Transform data about blocks for export
+            prefinal_blocks = list(zip(genomic_block_starts, final_block_sizes))
+            if self.transcript_obj.strand == "-":
+                prefinal_blocks.reverse()
+
+            if self.debug_mode:
+                logging.info("Normlizing block coordinates after collection")
+
+            final_block_starts = ""
+            final_block_sizes = ""
+            for block_start, block_len in prefinal_blocks:
+                final_block_starts += f"{(block_start - final_genomic_start)},"
+                final_block_sizes += f"{block_len},"
+
+            if self.debug_mode:
+                logging.info("Successfully collected block information before writing a BED entry")
+
+            with open(self.bed_file_path, 'a') as bed_file_handle:
+                bed_file_handle.write(f"{chrom}\t{final_genomic_start - 1}\t{final_genomic_end}\t" +
+                                      f"{feature_name}\t0\t{self.transcript_obj.strand}\t" +
+                                      f"{final_genomic_start - 1}\t{final_genomic_start - 1}\t" +
+                                      f"0,0,0\t{len(prefinal_blocks)}\t" +
+                                      f"{final_block_sizes}\t{final_block_starts}\n")

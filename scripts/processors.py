@@ -176,7 +176,7 @@ class VariantProcessor:
                         continue
                         
                     # Initialize annotator with TranscriptSequence
-                    self.annotator = VariantAnnotator(transcript_seq)
+                    self.annotator = VariantAnnotator(transcript_seq, transcript_obj)
 
                     # Get pre-determined overlap status from the Transcript object
                     # This was determined at transcript creation time using raw coordinates
@@ -192,6 +192,9 @@ class VariantProcessor:
                         
                     # Prepare variant data with all information
                     variant_data = {
+                        'chromosome': chrom,
+                        'rsid': rsid,
+                        'full_uorf_name': bed_full_name,
                         'position': variant_coords.transcript,
                         'ref_allele': variant_ref,
                         'alt_allele': variant_alt,
@@ -364,7 +367,7 @@ class VariantProcessor:
                             continue
                             
                         # Initialize annotator with TranscriptSequence
-                        self.annotator = VariantAnnotator(transcript_seq)
+                        self.annotator = VariantAnnotator(transcript_seq, transcript_obj)
 
                         # Get pre-determined overlap status from the Transcript object
                         overlaps_maincds = getattr(transcript_obj, 'overlaps_maincds', False)
@@ -379,6 +382,9 @@ class VariantProcessor:
                             
                         # Prepare variant data with all information
                         variant_data = {
+                            'chromosome': chrom,
+                            'rsid': rsid,
+                            'full_uorf_name': bed_full_name,
                             'position': variant_coords.transcript,
                             'ref_allele': variant_ref,
                             'alt_allele': variant_alt,
