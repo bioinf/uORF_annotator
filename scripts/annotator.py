@@ -183,14 +183,17 @@ class VariantAnnotator:
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
         
         new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.FRAMESHIFT)
-        
+
+        maincds_start = variant_data['maincds_start']
+        maincds_end = variant_data['maincds_end']
+
         if new_stop_pos is None:
-            new_stop_pos = variant_data['maincds_end']
+            new_stop_pos = len(self.transcript_seq.sequence)
         
         if overlaps_maincds:
             original_stop = variant_data['uorf_end']
             
-            if new_stop_pos is None:
+            if new_stop_pos > maincds_end:
                 return MainCDSImpact.OVERLAP_EXTENSION
                 
             if new_stop_pos < variant_data['maincds_start']:
@@ -202,14 +205,13 @@ class VariantAnnotator:
             else:
                 return MainCDSImpact.OVERLAP_EXTENSION
         
-        maincds_start = variant_data['maincds_start']
-        maincds_end = variant_data['maincds_end']
-        
         if new_stop_pos < maincds_start:
-            return MainCDSImpact.UORF_PRODUCT_TRUNCATION
+            return MainCDSImpact.UORF_PRODUCT_EXTENSION
         elif new_stop_pos == maincds_end:
+            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION)
             return MainCDSImpact.N_TERMINAL_EXTENSION
         else:
+            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
 
     def _handle_stop_gained(self, variant_data: Dict) -> MainCDSImpact:
@@ -266,11 +268,7 @@ class VariantAnnotator:
                     logging.info(f"mainCDS end: {maincds_end} (transcript)")
             
             # Determine where to start scanning for a new stop codon
-            if uorf_consequence == UORFConsequence.STOP_LOST:
-                scan_start_pos = uorf_end + 1
-                if self.debug_mode:
-                    logging.info(f"Scanning from the stop codon position: {scan_start_pos}")
-            elif uorf_consequence == UORFConsequence.FRAMESHIFT:
+            if uorf_consequence == UORFConsequence.STOP_LOST or uorf_consequence == UORFConsequence.FRAMESHIFT:
                 scan_start_pos = uorf_start - 1
                 if self.debug_mode:
                     logging.info(f"Scanning from variant position: {scan_start_pos}")
@@ -290,79 +288,37 @@ class VariantAnnotator:
                 # Show first part of sequence to aid debugging
                 max_display = min(50, len(sequence))
                 logging.info(f"Scanning sequence: {sequence[:max_display]}... (length: {len(sequence)})")
-            
-            # Calculate reading frame
-            rel_pos = transcript_pos - uorf_start
-            original_frame = rel_pos % 3
-            
-            if self.debug_mode:
-                logging.info(f"Original position relative to uORF start: {rel_pos}")
-                logging.info(f"Original reading frame: {original_frame}")
-            
-            # Determine frame for scanning based on variant consequence
-            frame = None
 
             ref_allele = variant_data.get('ref_allele', '')
             alt_allele = variant_data.get('alt_allele', '')
 
-            if uorf_consequence == UORFConsequence.FRAMESHIFT:
-                
-                if not ref_allele or not alt_allele:
-                    if self.debug_mode:
-                        logging.info("Missing allele information for frameshift variant")
-                    return None, None
-                    
-                # Calculate the frame shift
-                shift_amount = (len(alt_allele) - len(ref_allele)) % 3
-                if shift_amount == 0:
-                    if self.debug_mode:
-                        logging.info("Frameshift with no net change in frame (multiple of 3)")
-                    return None, None
-                    
-                # New frame after the frameshift
-                frame = (original_frame + shift_amount) % 3
-                
+            if not ref_allele or not alt_allele:
                 if self.debug_mode:
-                    logging.info(f"Frameshift variant: ref='{ref_allele}', alt='{alt_allele}'")
-                    logging.info(f"Shift amount: {shift_amount} nucleotides")
-                    logging.info(f"New reading frame after shift: {frame}")
+                    logging.info("Missing allele information for frameshift variant")
+                return None, None
 
-                # REAL : Making necessary sequence changes
-                relative_pos = transcript_pos - uorf_start
+            # REAL : Making necessary sequence changes
+            relative_pos = transcript_pos - uorf_start
+            if self.debug_mode:
+                logging.info("Amending transcript sequence to incorporate alternative allele")
+            if strand == "+":
                 if self.debug_mode:
-                    logging.info("Amending transcript sequence to incorporate alternative allele")
-                if strand == "+":
-                    if self.debug_mode:
-                        logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
-                        logging.info(f"Sequence up until site: {sequence[:relative_pos]}")
-                        logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
-                    sequence = sequence[:relative_pos] + alt_allele + sequence[relative_pos + len(ref_allele):]
-                else:
-                    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
-                                  'N': 'N', 'n': 'n'}
-                    alt_alelle_complement = ''.join(complement.get(base.upper(), base)
-                                   for base in reversed(alt_allele))
-                    sequence= sequence[:relative_pos - len(ref_allele)] + alt_alelle_complement + sequence[relative_pos:]
-                    
-            elif uorf_consequence == UORFConsequence.STOP_LOST:
-                # For stop loss, we need to determine the original stop codon's frame
-                # TODO: this is not necesary, as stop codon will always be in the 1st frame
-                stop_dist = uorf_end - uorf_start
-                orig_stop_frame = stop_dist % 3
-                
-                # Adjust for scanning position
-                scan_offset = (uorf_end - scan_start_pos) % 3
-                frame = (3 - scan_offset) % 3
-                
-                if self.debug_mode:
-                    logging.info(f"Stop loss: uORF length={stop_dist}, original stop frame={orig_stop_frame}")
-                    logging.info(f"Scan offset from uORF end: {scan_offset}")
-                    logging.info(f"Adjusted frame for scanning: {frame}")
+                    logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.info(f"Sequence up until site: {sequence[:relative_pos]}")
+                    logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
+                sequence = sequence[:relative_pos] + alt_allele + sequence[relative_pos + len(ref_allele):]
             else:
-                frame = original_frame
-                
+                #complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
+                #              'N': 'N', 'n': 'n'}
+                #alt_alelle_complement = ''.join(complement.get(base.upper(), base)
+                #               for base in reversed(alt_allele))
+
                 if self.debug_mode:
-                    logging.info(f"Using original frame for scanning: {frame}")
+                    logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.info(f"Sequence up until site: {sequence[:relative_pos - len(ref_allele) + 1]}")
+                    logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele) - 1:]}")
+
+                sequence = sequence[:relative_pos - len(ref_allele) + 1] + alt_allele + sequence[(relative_pos - 1):]
             
             # Find the next in-frame stop codon
             stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, 1)
@@ -373,7 +329,12 @@ class VariantAnnotator:
                     
             # Calculate absolute transcript position
             allele_length_shift = len(alt_allele) - len(ref_allele)
-            absolute_stop_pos = scan_start_pos + stop_pos + allele_length_shift  # +2 for the full codon
+
+            # TODO: Why do we have to do this? It appears that stop codon position in main CDS is annotated differently for different strands
+            if strand == "+":
+                absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 3 # +2 for the full codon
+            else:
+                absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 1
             
             if self.debug_mode:
                 logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
@@ -402,7 +363,7 @@ class VariantAnnotator:
             if not full_sequence:
                 return ""
                 
-            start_index = start_pos - 1  # Convert 1-based to 0-based
+            start_index = start_pos  # Convert 1-based to 0-based
             if start_index < 0 or start_index >= len(full_sequence):
                 logging.error(f"Start index {start_index} is out of bounds (0-{len(full_sequence)-1})")
                 return ""
@@ -742,9 +703,17 @@ class VariantAnnotator:
             if self.debug_mode:
                 logging.info("Successfully collected block information before writing a BED entry")
 
+            if main_cds_eff == MainCDSImpact.OUT_OF_FRAME_OVERLAP:
+                feature_color = '255,0,0'
+            elif main_cds_eff == MainCDSImpact.N_TERMINAL_EXTENSION:
+                feature_color = '255,128,0'
+            else:
+                logging.warning("Attempted to generate BED entry for non-relevant impact, skipping")
+                return ""
+
             with open(self.bed_file_path, 'a') as bed_file_handle:
                 bed_file_handle.write(f"{chrom}\t{final_genomic_start - 1}\t{final_genomic_end}\t" +
                                       f"{feature_name}\t0\t{self.transcript_obj.strand}\t" +
                                       f"{final_genomic_start - 1}\t{final_genomic_start - 1}\t" +
-                                      f"0,0,0\t{len(prefinal_blocks)}\t" +
+                                      f"{feature_color}\t{len(prefinal_blocks)}\t" +
                                       f"{final_block_sizes}\t{final_block_starts}\n")
