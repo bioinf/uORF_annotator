@@ -267,11 +267,11 @@ class VariantAnnotator:
             
             # Determine where to start scanning for a new stop codon
             if uorf_consequence == UORFConsequence.STOP_LOST:
-                scan_start_pos = uorf_end
+                scan_start_pos = uorf_end + 1
                 if self.debug_mode:
                     logging.info(f"Scanning from the stop codon position: {scan_start_pos}")
             elif uorf_consequence == UORFConsequence.FRAMESHIFT:
-                scan_start_pos = transcript_pos
+                scan_start_pos = uorf_start - 1
                 if self.debug_mode:
                     logging.info(f"Scanning from variant position: {scan_start_pos}")
             else:
@@ -301,10 +301,11 @@ class VariantAnnotator:
             
             # Determine frame for scanning based on variant consequence
             frame = None
-            
+
+            ref_allele = variant_data.get('ref_allele', '')
+            alt_allele = variant_data.get('alt_allele', '')
+
             if uorf_consequence == UORFConsequence.FRAMESHIFT:
-                ref_allele = variant_data.get('ref_allele', '')
-                alt_allele = variant_data.get('alt_allele', '')
                 
                 if not ref_allele or not alt_allele:
                     if self.debug_mode:
@@ -325,9 +326,27 @@ class VariantAnnotator:
                     logging.info(f"Frameshift variant: ref='{ref_allele}', alt='{alt_allele}'")
                     logging.info(f"Shift amount: {shift_amount} nucleotides")
                     logging.info(f"New reading frame after shift: {frame}")
+
+                # REAL : Making necessary sequence changes
+                relative_pos = transcript_pos - uorf_start
+                if self.debug_mode:
+                    logging.info("Amending transcript sequence to incorporate alternative allele")
+                if strand == "+":
+                    if self.debug_mode:
+                        logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                        logging.info(f"Sequence up until site: {sequence[:relative_pos]}")
+                        logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
+                    sequence = sequence[:relative_pos] + alt_allele + sequence[relative_pos + len(ref_allele):]
+                else:
+                    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
+                                  'N': 'N', 'n': 'n'}
+                    alt_alelle_complement = ''.join(complement.get(base.upper(), base)
+                                   for base in reversed(alt_allele))
+                    sequence= sequence[:relative_pos - len(ref_allele)] + alt_alelle_complement + sequence[relative_pos:]
                     
             elif uorf_consequence == UORFConsequence.STOP_LOST:
                 # For stop loss, we need to determine the original stop codon's frame
+                # TODO: this is not necesary, as stop codon will always be in the 1st frame
                 stop_dist = uorf_end - uorf_start
                 orig_stop_frame = stop_dist % 3
                 
@@ -346,14 +365,15 @@ class VariantAnnotator:
                     logging.info(f"Using original frame for scanning: {frame}")
             
             # Find the next in-frame stop codon
-            stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, frame)
+            stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, 1)
             if stop_pos is None:
                 if self.debug_mode:
                     logging.info("No new stop codon found in sequence")
                 return None, None
                     
             # Calculate absolute transcript position
-            absolute_stop_pos = scan_start_pos + stop_pos + 2  # +2 for the full codon
+            allele_length_shift = len(alt_allele) - len(ref_allele)
+            absolute_stop_pos = scan_start_pos + stop_pos + allele_length_shift  # +2 for the full codon
             
             if self.debug_mode:
                 logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
@@ -416,7 +436,7 @@ class VariantAnnotator:
                 return None, None
                 
             # Adjust the starting point based on the frame
-            start = frame
+            start = frame - 1
             
             if self.debug_mode:
                 logging.info(f"Looking for stop codons starting at offset {start} with frame {frame}")
