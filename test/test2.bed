@@ -4,4 +4,5 @@ chr1	125	149	transcript_2|overlapping|recessive|non-ATG	0	-	125	125	0,0,0	1	24,	
 chr1	153	168	transcript_2|non-overlapping|recessive|ATG	0	-	153	153	0,0,0	1	15,	0,
 chr2	15	36	transcript_3|non-overlapping|recessive|ATG	0	+	15	15	0,0,0	2	8,4	0,17
 chr2	113	151	transcript_4|overlapping|dominant|ATG	0	-	113	113	0,0,0	2	3,18	0,20
+chr2	147	159	transcript_4|non-overlapping|dominant|ATG	0	-	147	147	0,0,0	1	12	0,
 chr3	3	12	transcript_5|non-overlapping|recessive|ATG	0	+	3	3	0,0,0	1	9,	0,

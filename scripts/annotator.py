@@ -316,9 +316,9 @@ class VariantAnnotator:
                 if self.debug_mode:
                     logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
                     logging.info(f"Sequence up until site: {sequence[:relative_pos - len(ref_allele) + 1]}")
-                    logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele) - 1:]}")
+                    logging.info(f"Sequence after site: {sequence[relative_pos + 1:]}")
 
-                sequence = sequence[:relative_pos - len(ref_allele) + 1] + alt_allele + sequence[(relative_pos - 1):]
+                sequence = sequence[:relative_pos - len(ref_allele) + 1] + alt_allele + sequence[(relative_pos + 1):]
             
             # Find the next in-frame stop codon
             stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, 1)
@@ -330,11 +330,7 @@ class VariantAnnotator:
             # Calculate absolute transcript position
             allele_length_shift = len(alt_allele) - len(ref_allele)
 
-            # TODO: Why do we have to do this? It appears that stop codon position in main CDS is annotated differently for different strands
-            if strand == "+":
-                absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 3 # +2 for the full codon
-            else:
-                absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 1
+            absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 3 # +2 for the full codon
             
             if self.debug_mode:
                 logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
@@ -620,7 +616,9 @@ class VariantAnnotator:
             rsid = variant_data['rsid']
             feature_name = f'{rsid}|{main_cds_eff.name}|{full_uorf_name}'
 
-            transcript_exons = self.transcript_obj.exons
+            transcript_exons = self.transcript_obj.exons.copy()
+            if self.transcript_obj.strand == '-':
+                transcript_exons.reverse()
             final_genomic_start = None
             final_genomic_end = None
 
@@ -640,13 +638,14 @@ class VariantAnnotator:
                 # TODO: ideally, this step has to be performed at transcript extension
                 if exon_number == 0:
 
-                    if self.debug_mode:
-                        logging.info("Normalizing coordinates for the first exon (if necessary)")
-
                     if (self.transcript_obj.strand == "+") and (uorf_start_genomic < current_exon.genome_start):
+                        if self.debug_mode:
+                            logging.info(f"Normalizing coordinates for the first exon. Exon start is {current_exon.genome_start}, uORF genome start is {uorf_start_genomic}")
                         current_exon.length += (current_exon.genome_start - uorf_start_genomic)
                         current_exon.genome_start = uorf_start_genomic
                     if (self.transcript_obj.strand == "-") and (uorf_end_genomic > current_exon.genome_end):
+                        if self.debug_mode:
+                            logging.info(f"Normalizing coordinates for the first exon (reverse strand). Exon end is {current_exon.genome_end}, uORF genome end is {uorf_end_genomic}")
                         current_exon.length += (uorf_end_genomic - current_exon.genome_end)
                         current_exon.genome_end = uorf_end_genomic
 
@@ -658,6 +657,8 @@ class VariantAnnotator:
                 uorf_start_offset = 0
                 if uorf_start >= current_exon_start:
                     uorf_start_offset = (uorf_start - current_exon_start)
+                    if self.debug_mode:
+                        logging.info(f"Current exon contains uORF start, offset is {uorf_start_offset}")
 
                 if new_stop_pos <= current_exon_end:
                     # If the stop codon is in the exon, calculate its position and block size (including offset)
@@ -673,14 +674,21 @@ class VariantAnnotator:
                     final_block_sizes.append(new_stop_pos - uorf_start_offset - current_exon_start + 1)
                 else:
                     # If stop codon is not in the exon, store its start and length with offset correction
-                    genomic_block_starts.append(current_exon.genome_start + uorf_start_offset)
+                    if self.transcript_obj.strand == "+":
+                        genomic_block_starts.append(current_exon.genome_start + uorf_start_offset)
+                    else:
+                        genomic_block_starts.append(current_exon.genome_start)
                     final_block_sizes.append(current_exon.length - uorf_start_offset)
                 current_exon_start += current_exon.length
 
             # If stop codon was not found, fill the margin with last exon boundary
             if final_genomic_start is None:
+                if self.debug_mode:
+                    logging.info("Start coordinate not found during iteration, setting to first exon genome start")
                 final_genomic_start = current_exon.genome_start
             if final_genomic_end is None:
+                if self.debug_mode:
+                    logging.info("End coordinate not found during iteration, setting to first exon genome end")
                 final_genomic_end = current_exon.genome_end
 
             if self.debug_mode:
