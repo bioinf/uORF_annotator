@@ -49,13 +49,13 @@ class VariantAnnotator:
     START_CODONS = {'ATG'}
     STOP_CODONS = {'TAA', 'TAG', 'TGA'}
 
-    def __init__(self, transcript_sequence, transcript_obj : Transcript, bed_file_path = None):
+    def __init__(self, transcript_sequence, transcript_obj : Transcript, bed_file_path = None, debug_mode = False):
         """Initialize with TranscriptSequence object instead of raw sequence."""
         self.transcript_seq = transcript_sequence
         self.transcript_obj = transcript_obj
         self._initialize_impact_rules()
-        self.debug_mode = True
-        self.bed_file_path = "testoutput.bed" # bed_file_path
+        self.debug_mode = debug_mode
+        self.bed_file_path = bed_file_path
 
     def _initialize_impact_rules(self):
         """Initialize rule-based system for impact prediction."""
@@ -595,7 +595,6 @@ class VariantAnnotator:
         """Check if amino acid change is synonymous."""
         return (self.CODON_TABLE.get(ref_codon) == self.CODON_TABLE.get(alt_codon))
 
-    # NEW: created by Yury 28-Mar-2025
     def _write_bed_entry(self, new_stop_pos : int,
                          variant_data : Dict,
                          main_cds_eff : MainCDSImpact):

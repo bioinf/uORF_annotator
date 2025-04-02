@@ -3,25 +3,46 @@ import argparse
 import pandas as pd
 from pybedtools import BedTool
 import pysam
+import os
 
 from converters import CoordinateConverter
 from processors import VariantProcessor
+from annotator import VariantAnnotator
 
 
 class Pipeline:
     """Main pipeline for variant analysis and annotation."""
     
-    def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str):
+    def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str, output_prefix: str, debug_mode: bool = False):
         """Initialize pipeline with input files."""
         self.bed_file = bed_file
         self.vcf_file = vcf_file
         self.fasta_file = fasta_file
+        self.output_prefix = output_prefix
+        self.debug_mode = debug_mode
+        
+        # Generate output filenames - ensure we don't double-add extensions
+        self.tsv_output = f"{output_prefix}.tsv"
+        self.bed_output = f"{output_prefix}.bed"
+        
+        # Initialize fasta reference and converter before creating output files
         self.fasta = pysam.FastaFile(fasta_file)
+        
+        # Use a copy of the bed file for analysis to avoid file handle issues
         self.converter = CoordinateConverter(bed_file, gtf_file)
-        self.processor = VariantProcessor(self.converter, self.fasta)
+        
+        # Initialize the processor with the output BED file path
+        # but don't create the file until we're ready to write to it
+        self.processor = VariantProcessor(self.converter, self.fasta, bed_output=self.bed_output, debug_mode=debug_mode)
 
     def process_variants(self) -> pd.DataFrame:
         """Process and annotate variants."""
+        # Create an empty BED output file right before processing
+        # This ensures any file handles from reading are closed
+        with open(self.bed_output, 'w') as bed_file:
+            # Just create an empty file - will be appended to during processing
+            pass
+            
         intersected = self._intersect_files()
         if intersected.empty:
             logging.error("No intersections found between VCF and BED!")
@@ -103,6 +124,17 @@ class Pipeline:
         df.columns = [f'col{i}' for i in range(len(df.columns))]
         return df
 
+    def save_results(self, results_df: pd.DataFrame) -> None:
+        """Save results to output files."""
+        if not results_df.empty:
+            # Save TSV results
+            results_df.to_csv(self.tsv_output, sep='\t', index=False)
+            logging.info(f"Results successfully saved to {self.tsv_output}")
+            logging.info(f"BED file generated at {self.bed_output}")
+            logging.info(f"Total variant-uORF pairs processed: {len(results_df)}")
+        else:
+            logging.warning("No variants were processed successfully.")
+
 
 def main():
     """Main entry point for the pipeline."""
@@ -113,28 +145,44 @@ def main():
     parser.add_argument('--vcf', required=True, help='Path to VCF file')
     parser.add_argument('--gtf', required=True, help='Path to GTF file')
     parser.add_argument('--fasta', required=True, help='Path to reference FASTA')
-    parser.add_argument('--output', required=True, help='Path to output file')
+    
+    # Support both old and new output arguments for backward compatibility
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument('--output', help='Path to output file (legacy mode)')
+    output_group.add_argument('--output-prefix', help='Prefix for output files (.tsv and .bed will be appended)')
+    
+    # Add debug mode argument
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
     args = parser.parse_args()
 
+    # Set logging level based on the debug flag
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
     try:
+        # Determine output prefix from either argument
+        output_prefix = args.output_prefix if args.output_prefix else args.output
+        
+        # Clean up the output prefix to remove any extensions
+        # This ensures we don't end up with duplicate extensions
+        if output_prefix.endswith('.tsv'):
+            output_prefix = output_prefix[:-4]
+        elif output_prefix.endswith('.bed'):
+            output_prefix = output_prefix[:-4]
+            
         logging.info("Initializing pipeline...")
-        pipeline = Pipeline(args.bed, args.vcf, args.gtf, args.fasta)
+        pipeline = Pipeline(args.bed, args.vcf, args.gtf, args.fasta, output_prefix, debug_mode=args.debug)
         
         logging.info("Processing variants...")
         results = pipeline.process_variants()
         
-        if not results.empty:
-            results.to_csv(args.output, sep='\t', index=False)
-            logging.info(f"Results successfully saved to {args.output}")
-            logging.info(f"Total variant-uORF pairs processed: {len(results)}")
-        else:
-            logging.warning("No variants were processed successfully.")
+        # Save results to both TSV and BED files
+        pipeline.save_results(results)
         
     except Exception as e:
         logging.error(f"Pipeline failed: {str(e)}", exc_info=True)

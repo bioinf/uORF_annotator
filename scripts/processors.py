@@ -10,10 +10,12 @@ from annotator import VariantAnnotator, UORFConsequence, MainCDSImpact
 from transcript_sequence import TranscriptSequence
 
 class VariantProcessor:
-    def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile):
+    def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile, bed_output: str = None, debug_mode: bool = False):
         """Initialize the variant processor with coordinate converter and reference sequence."""
         self.converter = converter
         self.fasta = fasta
+        self.bed_output = bed_output
+        self.debug_mode = debug_mode
         self.annotator = None
         self.debug_info = {}
 
@@ -80,7 +82,8 @@ class VariantProcessor:
                     logging.warning(f"No matching transcripts found for BED entry: {bed_full_name}")
                     continue
                 
-                logging.debug(f"Found {len(matching_transcripts)} matching transcripts for {bed_full_name}: {matching_transcripts}")
+                if self.debug_mode:
+                    logging.debug(f"Found {len(matching_transcripts)} matching transcripts for {bed_full_name}: {matching_transcripts}")
                 
                 # Separate regular and extended transcripts
                 regular_transcripts = []
@@ -107,7 +110,8 @@ class VariantProcessor:
                     
                     # Skip if we've already processed this uORF
                     if uorf_key in self._processed_uorfs:
-                        logging.debug(f"Skipping already processed uORF: {uorf_key}")
+                        if self.debug_mode:
+                            logging.debug(f"Skipping already processed uORF: {uorf_key}")
                         continue
                         
                     # Mark this uORF as processed
@@ -131,7 +135,8 @@ class VariantProcessor:
                             is_within_uorf = (vcf_pos >= uorf_min and vcf_pos <= uorf_max)
                         
                         if not is_within_uorf:
-                            logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
+                            if self.debug_mode:
+                                logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
                                        f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
                                        f"for {transcript_id}, skipping")
                             continue  # Skip to next transcript
@@ -141,14 +146,17 @@ class VariantProcessor:
                     if variant_coords:
                         # If we found coordinates in a regular transcript, add to processed positions
                         processed_positions.add(variant_coords.transcript)
-                        logging.debug(f"Found position {vcf_pos} in regular transcript {transcript_id}")
+                        if self.debug_mode:
+                            logging.debug(f"Found position {vcf_pos} in regular transcript {transcript_id}")
                     else:
-                        logging.debug(f"Position {vcf_pos} not in regular transcript coordinates for {transcript_id}, skipping")
+                        if self.debug_mode:
+                            logging.debug(f"Position {vcf_pos} not in regular transcript coordinates for {transcript_id}, skipping")
                         continue  # Skip to next transcript
                         
                     # Check if uORF coordinates are still missing after potential extension
                     if transcript_obj.uorf_start is None or transcript_obj.uorf_end is None:
-                        logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
+                        if self.debug_mode:
+                            logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
                         continue  # Skip to next transcript
                     
                     # Handle variant alleles based on strand
@@ -162,26 +170,30 @@ class VariantProcessor:
                         # to transform alleles to match the transcript orientation
                         variant_ref = TranscriptSequence._reverse_complement(ref_allele)
                         variant_alt = TranscriptSequence._reverse_complement(alt_allele)
-                        logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
+                        if self.debug_mode:
+                            logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
 
                     # Create TranscriptSequence object
                     transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
                     if not transcript_seq.sequence:
-                        logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
+                        if self.debug_mode:
+                            logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
                         continue
                         
                     # Check if uORF region was extracted successfully
                     if not transcript_seq.uorf_region:
-                        logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
+                        if self.debug_mode:
+                            logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
                         continue
                         
                     # Initialize annotator with TranscriptSequence
-                    self.annotator = VariantAnnotator(transcript_seq, transcript_obj)
+                    self.annotator = VariantAnnotator(transcript_seq, transcript_obj, bed_file_path=self.bed_output, debug_mode=self.debug_mode)
 
                     # Get pre-determined overlap status from the Transcript object
                     # This was determined at transcript creation time using raw coordinates
                     overlaps_maincds = getattr(transcript_obj, 'overlaps_maincds', False)
-                    logging.debug(f"Using pre-determined overlap status for {transcript_id}: {overlaps_maincds}")
+                    if self.debug_mode:
+                        logging.debug(f"Using pre-determined overlap status for {transcript_id}: {overlaps_maincds}")
 
                     # Get codon change
                     codon_change = self.annotator.get_codon_change({
@@ -191,15 +203,16 @@ class VariantProcessor:
                     })
 
                     # Log detailed information about codon processing
-                    logging.debug(f"Codon processing details for {transcript_id}:")
-                    logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
-                    if transcript_obj.strand == '-':
-                        logging.debug(f"  Strand: negative, using reverse complement")
-                        logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
-                    else:
-                        logging.debug(f"  Strand: positive, using original alleles")
-                        logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
-                    logging.debug(f"  Computed codon change: {codon_change}")
+                    if self.debug_mode:
+                        logging.debug(f"Codon processing details for {transcript_id}:")
+                        logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
+                        if transcript_obj.strand == '-':
+                            logging.debug(f"  Strand: negative, using reverse complement")
+                            logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
+                        else:
+                            logging.debug(f"  Strand: positive, using original alleles")
+                            logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
+                        logging.debug(f"  Computed codon change: {codon_change}")
 
                     # Store the original alleles for result output, but also store the processed ones
                     # for consistent reference
@@ -296,19 +309,23 @@ class VariantProcessor:
                             
                     if not is_duplicate:
                         results.append(result)
-                        logging.debug(f"Added result for transcript-uORF: {transcript_id}")
+                        if self.debug_mode:
+                            logging.debug(f"Added result for transcript-uORF: {transcript_id}")
                     else:
-                        logging.debug(f"Skipping duplicate result for transcript-uORF: {transcript_id}")
+                        if self.debug_mode:
+                            logging.debug(f"Skipping duplicate result for transcript-uORF: {transcript_id}")
                     
                     # Add this position to processed positions so we don't process it again in extended transcripts
                     processed_positions.add(variant_coords.transcript)
                 
                 # If no results from regular transcripts, try extended transcripts
                 if not results and extended_transcripts:
-                    logging.debug("No results from regular transcripts, trying extended transcripts")
+                    if self.debug_mode:
+                        logging.debug("No results from regular transcripts, trying extended transcripts")
                     
                     for transcript_id in extended_transcripts:
-                        logging.debug(f"Processing extended transcript-uORF: {transcript_id}")
+                        if self.debug_mode:
+                            logging.debug(f"Processing extended transcript-uORF: {transcript_id}")
                         
                         transcript_obj = self.converter.transcripts[transcript_id]
                         
@@ -317,14 +334,16 @@ class VariantProcessor:
                         
                         # Skip if we've already processed this uORF
                         if uorf_key in self._processed_uorfs:
-                            logging.debug(f"Skipping already processed uORF: {uorf_key}")
+                            if self.debug_mode:
+                                logging.debug(f"Skipping already processed uORF: {uorf_key}")
                             continue
                             
                         # Mark this uORF as processed
                         self._processed_uorfs[uorf_key] = True
                         
                         # Log debug information
-                        self._log_debug_info(transcript_id, transcript_obj, vcf_pos)
+                        if self.debug_mode:
+                            self._log_debug_info(transcript_id, transcript_obj, vcf_pos)
                         
                         # Check if the variant is actually within the uORF genomic coordinates
                         if (transcript_obj.uorf_start_genomic is not None and 
@@ -341,25 +360,29 @@ class VariantProcessor:
                                 is_within_uorf = (vcf_pos >= uorf_min and vcf_pos <= uorf_max)
                             
                             if not is_within_uorf:
-                                logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
-                                           f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
-                                           f"for extended transcript {transcript_id}, skipping")
+                                if self.debug_mode:
+                                    logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
+                                               f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
+                                               f"for extended transcript {transcript_id}, skipping")
                                 continue  # Skip to next transcript
                         
                         # Get transcript position for the variant
                         variant_coords = transcript_obj.get_coordinates(vcf_pos)
                         if not variant_coords:
-                            logging.debug(f"Position {vcf_pos} not in extended transcript coordinates for {transcript_id}, skipping")
+                            if self.debug_mode:
+                                logging.debug(f"Position {vcf_pos} not in extended transcript coordinates for {transcript_id}, skipping")
                             continue  # Skip to next transcript
                         
                         # Check if this position was already processed in a regular transcript
                         if variant_coords.transcript in processed_positions:
-                            logging.debug(f"Position {variant_coords.transcript} already processed in regular transcript, skipping")
+                            if self.debug_mode:
+                                logging.debug(f"Position {variant_coords.transcript} already processed in regular transcript, skipping")
                             continue
                             
                         # Check if uORF coordinates are still missing after potential extension
                         if transcript_obj.uorf_start is None or transcript_obj.uorf_end is None:
-                            logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
+                            if self.debug_mode:
+                                logging.debug(f"Missing uORF transcript coordinates for {transcript_id}, skipping")
                             continue  # Skip to next transcript
 
                         # Handle variant alleles based on strand
@@ -371,25 +394,29 @@ class VariantProcessor:
                             # Use the TranscriptSequence's reverse complement method
                             variant_ref = TranscriptSequence._reverse_complement(ref_allele)
                             variant_alt = TranscriptSequence._reverse_complement(alt_allele)
-                            logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
+                            if self.debug_mode:
+                                logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
                             
                         # Create TranscriptSequence object
                         transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
                         if not transcript_seq.sequence:
-                            logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
+                            if self.debug_mode:
+                                logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
                             continue
                             
                         # Check if uORF region was extracted successfully
                         if not transcript_seq.uorf_region:
-                            logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
+                            if self.debug_mode:
+                                logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
                             continue
                             
                         # Initialize annotator with TranscriptSequence
-                        self.annotator = VariantAnnotator(transcript_seq, transcript_obj)
+                        self.annotator = VariantAnnotator(transcript_seq, transcript_obj, bed_file_path=self.bed_output, debug_mode=self.debug_mode)
 
                         # Get pre-determined overlap status from the Transcript object
                         overlaps_maincds = getattr(transcript_obj, 'overlaps_maincds', False)
-                        logging.debug(f"Using pre-determined overlap status for {transcript_id}: {overlaps_maincds}")
+                        if self.debug_mode:
+                            logging.debug(f"Using pre-determined overlap status for {transcript_id}: {overlaps_maincds}")
 
                         # Get codon change
                         codon_change = self.annotator.get_codon_change({
@@ -399,15 +426,16 @@ class VariantProcessor:
                         })
 
                         # Log detailed information about codon processing
-                        logging.debug(f"Codon processing details for {transcript_id}:")
-                        logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
-                        if transcript_obj.strand == '-':
-                            logging.debug(f"  Strand: negative, using reverse complement")
-                            logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
-                        else:
-                            logging.debug(f"  Strand: positive, using original alleles")
-                            logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
-                        logging.debug(f"  Computed codon change: {codon_change}")
+                        if self.debug_mode:
+                            logging.debug(f"Codon processing details for {transcript_id}:")
+                            logging.debug(f"  Original alleles: {ref_allele}>{alt_allele}")
+                            if transcript_obj.strand == '-':
+                                logging.debug(f"  Strand: negative, using reverse complement")
+                                logging.debug(f"  Reverse complemented alleles: {variant_ref}>{variant_alt}")
+                            else:
+                                logging.debug(f"  Strand: positive, using original alleles")
+                                logging.debug(f"  Processed alleles: {variant_ref}>{variant_alt}")
+                            logging.debug(f"  Computed codon change: {codon_change}")
 
                         # Store the original alleles for result output, but also store the processed ones
                         # for consistent reference
@@ -500,9 +528,11 @@ class VariantProcessor:
                                 
                         if not is_duplicate:
                             results.append(result)
-                            logging.debug(f"Added result for extended transcript-uORF: {transcript_id}")
+                            if self.debug_mode:
+                                logging.debug(f"Added result for extended transcript-uORF: {transcript_id}")
                         else:
-                            logging.debug(f"Skipping duplicate result for extended transcript-uORF: {transcript_id}")
+                            if self.debug_mode:
+                                logging.debug(f"Skipping duplicate result for extended transcript-uORF: {transcript_id}")
                     
             # Return all results
             return results
@@ -561,10 +591,12 @@ class VariantProcessor:
             # Use genomic coordinates as fallbacks if needed
             if uorf_start is None and transcript_obj.uorf_start_genomic is not None:
                 uorf_start = transcript_obj.get_transcript_position(transcript_obj.uorf_start_genomic)
-                logging.debug(f"Using fallback for uORF start: {uorf_start}")
+                if self.debug_mode:
+                    logging.debug(f"Using fallback for uORF start: {uorf_start}")
             if uorf_end is None and transcript_obj.uorf_end_genomic is not None:
                 uorf_end = transcript_obj.get_transcript_position(transcript_obj.uorf_end_genomic)
-                logging.debug(f"Using fallback for uORF end: {uorf_end}")
+                if self.debug_mode:
+                    logging.debug(f"Using fallback for uORF end: {uorf_end}")
         
         return uorf_start, uorf_end
 
