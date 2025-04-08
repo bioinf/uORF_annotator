@@ -31,6 +31,7 @@ class Transcript:
                  mainorf_end: Optional[int] = None,
                  uorf_start: Optional[int] = None,
                  uorf_end: Optional[int] = None,
+                 start_codon_type: Optional[str] = None,  # New parameter to store ATG vs non-ATG status
                  debug_mode: bool = False):
         self.transcript_id = transcript_id
         self.chromosome = chromosome
@@ -43,6 +44,9 @@ class Transcript:
         self.mainorf_end_genomic = mainorf_end
         self.uorf_start_genomic = uorf_start
         self.uorf_end_genomic = uorf_end
+        
+        # Store start codon type (ATG, NON-ATG, or None if unknown)
+        self.start_codon_type = start_codon_type
         
         # Initialize coordinate maps
         self.genome_to_transcript = {}

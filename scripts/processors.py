@@ -185,6 +185,13 @@ class VariantProcessor:
                         if self.debug_mode:
                             logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
                         continue
+                    
+                    # Get start codon information
+                    start_codon, is_canonical_atg = transcript_seq.get_start_codon()
+                    start_codon_type = "ATG" if is_canonical_atg else "NON-ATG"
+                    
+                    # Update transcript object with verified start codon type
+                    transcript_obj.start_codon_type = start_codon_type
                         
                     # Initialize annotator with TranscriptSequence
                     self.annotator = VariantAnnotator(transcript_seq, transcript_obj, bed_file_path=self.bed_output, debug_mode=self.debug_mode)
@@ -240,7 +247,9 @@ class VariantProcessor:
                         'maincds_end_genomic': transcript_obj.mainorf_end_genomic,
                         'codon_change': codon_change,
                         'overlaps_maincds': overlaps_maincds,
-                        'transcript_extended': getattr(transcript_obj, 'was_extended', False)
+                        'transcript_extended': getattr(transcript_obj, 'was_extended', False),
+                        'start_codon_type': start_codon_type,  # Add start codon type information
+                        'start_codon': start_codon  # Add actual start codon sequence
                     }
 
                     # Get consequences and impacts
@@ -288,7 +297,9 @@ class VariantProcessor:
                         'Codon_Change': codon_change,
                         'uORF_Consequence': uorf_consequence.value if uorf_consequence else 'None',
                         'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
-                        'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None'
+                        'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
+                        'Start_Codon_Type': start_codon_type,  # Add start codon type to the result
+                        'Start_Codon': start_codon  # Add actual start codon sequence to the result
                     }
                     
                     # Add additional information if transcript was extended
@@ -409,6 +420,13 @@ class VariantProcessor:
                             if self.debug_mode:
                                 logging.debug(f"Failed to extract uORF region for {transcript_id}, skipping")
                             continue
+                        
+                        # Get start codon information
+                        start_codon, is_canonical_atg = transcript_seq.get_start_codon()
+                        start_codon_type = "ATG" if is_canonical_atg else "NON-ATG"
+                        
+                        # Update transcript object with verified start codon type
+                        transcript_obj.start_codon_type = start_codon_type
                             
                         # Initialize annotator with TranscriptSequence
                         self.annotator = VariantAnnotator(transcript_seq, transcript_obj, bed_file_path=self.bed_output, debug_mode=self.debug_mode)
@@ -463,7 +481,9 @@ class VariantProcessor:
                             'maincds_end_genomic': transcript_obj.mainorf_end_genomic,
                             'codon_change': codon_change,
                             'overlaps_maincds': overlaps_maincds,
-                            'transcript_extended': True  # This should always be true for extended transcripts
+                            'transcript_extended': True,  # This should always be true for extended transcripts
+                            'start_codon_type': start_codon_type,  # Add start codon type information
+                            'start_codon': start_codon  # Add actual start codon sequence
                         }
 
                         # Get consequences and impacts
@@ -512,7 +532,9 @@ class VariantProcessor:
                             'uORF_Consequence': uorf_consequence.value if uorf_consequence else 'None',
                             'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
                             'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
-                            'Transcript_Extended': 'Yes'  # Always mark extended transcripts
+                            'Transcript_Extended': 'Yes',  # Always mark extended transcripts
+                            'Start_Codon_Type': start_codon_type,  # Add start codon type to the result
+                            'Start_Codon': start_codon  # Add actual start codon sequence to the result
                         }
                         
                         # Use a unique result identifier to avoid duplicates
@@ -611,7 +633,8 @@ class VariantProcessor:
             'uorf_end_t': transcript_obj.uorf_end,
             'variant_pos_g': vcf_pos,
             'was_extended': getattr(transcript_obj, 'was_extended', False),
-            'overlaps_maincds': getattr(transcript_obj, 'overlaps_maincds', False)
+            'overlaps_maincds': getattr(transcript_obj, 'overlaps_maincds', False),
+            'start_codon_type': getattr(transcript_obj, 'start_codon_type', 'Unknown')
         }
         
         # Store debug info

@@ -2,7 +2,7 @@
 Module for handling transcript sequences and uORF extraction.
 """
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 class TranscriptSequence:
     def __init__(self, transcript_obj, fasta, chromosome, debug_mode=False):
@@ -34,6 +34,9 @@ class TranscriptSequence:
         self.uorf_region = self._extract_uorf_region()
         if not self.uorf_region:
             logging.error(f"Failed to extract uORF region for {transcript_obj.transcript_id}")
+            
+        # Verify the start codon type if it was specified
+        self._verify_start_codon_type()
     
     def _store_original_coordinates(self):
         """
@@ -51,6 +54,47 @@ class TranscriptSequence:
         
         # Store original strand information
         self.original_strand = self.transcript.strand
+    
+    def _verify_start_codon_type(self):
+        """
+        Verify and potentially update the start codon type based on the actual sequence.
+        This helps ensure the start codon type metadata is accurate.
+        """
+        if not self.uorf_region or len(self.uorf_region) < 3:
+            logging.warning(f"Cannot verify start codon type for {self.transcript.transcript_id}: uORF region too short")
+            return
+            
+        # Extract the start codon from the uORF sequence
+        actual_start_codon = self.uorf_region[:3].upper()
+        
+        # If start codon type was specified in the transcript object, verify it
+        if hasattr(self.transcript, 'start_codon_type') and self.transcript.start_codon_type:
+            expected_type = self.transcript.start_codon_type.upper()
+            
+            # Check if the actual start codon matches the expected type
+            if expected_type == "ATG" and actual_start_codon != "ATG":
+                logging.warning(f"Start codon mismatch for {self.transcript.transcript_id}: "
+                              f"Expected ATG but found {actual_start_codon}")
+                # Update the start codon type
+                self.transcript.start_codon_type = "NON-ATG"
+                
+            elif expected_type == "NON-ATG" and actual_start_codon == "ATG":
+                logging.warning(f"Start codon mismatch for {self.transcript.transcript_id}: "
+                              f"Expected non-ATG but found ATG")
+                # Update the start codon type
+                self.transcript.start_codon_type = "ATG"
+                
+            if self.debug_mode:
+                logging.debug(f"Verified start codon for {self.transcript.transcript_id}: "
+                            f"{actual_start_codon} (type: {self.transcript.start_codon_type})")
+        else:
+            # If no start codon type was specified, determine it from the sequence
+            start_type = "ATG" if actual_start_codon == "ATG" else "NON-ATG"
+            self.transcript.start_codon_type = start_type
+            
+            if self.debug_mode:
+                logging.debug(f"Determined start codon type for {self.transcript.transcript_id}: "
+                            f"{actual_start_codon} (type: {start_type})")
     
     def _fix_transcript_coordinates(self):
         """
@@ -232,8 +276,10 @@ class TranscriptSequence:
                 
                 # Note: Since we've already done reverse complement for negative strand,
                 # the start codon should be ATG in the extracted sequence for both strands
-                if start_codon != 'ATG':
-                    logging.warning(f"Unusual start codon for uORF: {start_codon}, expected 'ATG'")
+                if start_codon != 'ATG' and (hasattr(self.transcript, 'start_codon_type') and 
+                                          self.transcript.start_codon_type == 'ATG'):
+                    logging.warning(f"Mismatch between expected ATG start codon and actual start codon {start_codon} "
+                                 f"for {self.transcript.transcript_id}")
                     
             return uorf_seq
             
@@ -324,6 +370,21 @@ class TranscriptSequence:
         except Exception as e:
             logging.error(f"Error getting codon: {str(e)}")
             return None
+    
+    def get_start_codon(self) -> Tuple[str, bool]:
+        """
+        Get the start codon of the uORF and determine if it's a canonical ATG.
+        
+        Returns:
+            Tuple of (start_codon_sequence, is_canonical_ATG)
+        """
+        if not self.uorf_region or len(self.uorf_region) < 3:
+            return ("", False)
+            
+        start_codon = self.uorf_region[:3].upper()
+        is_canonical = (start_codon == "ATG")
+        
+        return (start_codon, is_canonical)
 
     @staticmethod
     def _reverse_complement(sequence):
