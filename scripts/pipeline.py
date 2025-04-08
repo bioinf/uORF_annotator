@@ -29,7 +29,7 @@ class Pipeline:
         self.fasta = pysam.FastaFile(fasta_file)
         
         # Use a copy of the bed file for analysis to avoid file handle issues
-        self.converter = CoordinateConverter(bed_file, gtf_file)
+        self.converter = CoordinateConverter(bed_file, gtf_file, debug_mode=debug_mode)
         
         # Initialize the processor with the output BED file path
         # but don't create the file until we're ready to write to it

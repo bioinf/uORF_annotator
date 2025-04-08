@@ -14,16 +14,18 @@ from parsers import GTFParser
 class CoordinateConverter:
     """Handles conversion between genomic and transcript coordinates."""
     
-    def __init__(self, bed_file: str, gtf_file: str):
+    def __init__(self, bed_file: str, gtf_file: str, debug_mode: bool = False):
         """Initialize the converter with input files."""
         self.bed_file = bed_file
         self.gtf_file = gtf_file
         self.transcripts: Dict[str, Transcript] = {}
         self.raw_bed_entries = {}  # Store the raw bed entries for overlap determination
+        self.debug_mode = debug_mode
         
-        # Setup logging
+        # Setup logging - use INFO level by default, DEBUG only when debug_mode is True
+        log_level = logging.DEBUG if debug_mode else logging.INFO
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=log_level,
             format='%(asctime)s - %(levelname)s - %(message)s',
             force=True
         )
@@ -128,7 +130,8 @@ class CoordinateConverter:
                     mainorf_start=mainorf_coords[0],
                     mainorf_end=mainorf_coords[1],
                     uorf_start=int(bed_row[1]) + 1,  # BED is 0-based, convert to 1-based
-                    uorf_end=int(bed_row[2])
+                    uorf_end=int(bed_row[2]),
+                    debug_mode=self.debug_mode  # Pass debug_mode to Transcript
                 )
                 
                 # Store the new transcript

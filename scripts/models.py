@@ -30,11 +30,13 @@ class Transcript:
                  mainorf_start: Optional[int] = None, 
                  mainorf_end: Optional[int] = None,
                  uorf_start: Optional[int] = None,
-                 uorf_end: Optional[int] = None):
+                 uorf_end: Optional[int] = None,
+                 debug_mode: bool = False):
         self.transcript_id = transcript_id
         self.chromosome = chromosome
         self.strand = strand
         self.exons = sorted(exons, key=lambda x: x.genome_start)
+        self.debug_mode = debug_mode
         
         # Store genomic coordinates
         self.mainorf_start_genomic = mainorf_start
@@ -130,7 +132,7 @@ class Transcript:
         transcript_pos = self.genome_to_transcript.get(genomic_pos)
         
         # Log debug info for extended transcripts
-        if transcript_pos is None:
+        if transcript_pos is None and self.debug_mode:
             logging.debug(f"No transcript position found for genomic position {genomic_pos} in transcript {self.transcript_id}")
             
             # For debugging purposes, show the range of valid genomic positions
@@ -255,7 +257,8 @@ class Transcript:
         """Get both genomic and transcript coordinates for a position with detailed logging."""
         transcript_pos = self.genome_to_transcript.get(genomic_pos)
         if transcript_pos is not None:
-            logging.debug(f"Genomic pos {genomic_pos} -> Transcript pos {transcript_pos} "
+            if self.debug_mode:
+                logging.debug(f"Genomic pos {genomic_pos} -> Transcript pos {transcript_pos} "
                         f"for {self.transcript_id} (strand {self.strand}, extended: {self.was_extended})")
             return Coordinates(genomic_pos, transcript_pos)
         
@@ -263,7 +266,7 @@ class Transcript:
                       f"transcript {self.transcript_id} (ext: {self.was_extended})")
                       
         # For debugging, show the range of valid positions
-        if self.genome_to_transcript:
+        if self.genome_to_transcript and self.debug_mode:
             min_pos = min(self.genome_to_transcript.keys())
             max_pos = max(self.genome_to_transcript.keys())
             logging.warning(f"Valid genomic positions range: {min_pos}-{max_pos}")

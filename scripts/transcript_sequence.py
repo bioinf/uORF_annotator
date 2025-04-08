@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 class TranscriptSequence:
-    def __init__(self, transcript_obj, fasta, chromosome):
+    def __init__(self, transcript_obj, fasta, chromosome, debug_mode=False):
         """
         Initialize with transcript object, fasta reference, and chromosome.
         
@@ -13,9 +13,11 @@ class TranscriptSequence:
             transcript_obj: Transcript object containing coordinate information
             fasta: FastaFile object containing reference sequence
             chromosome: Chromosome name/identifier
+            debug_mode: Enable debug logging
         """
         self.transcript = transcript_obj
         self.chromosome = chromosome
+        self.debug_mode = debug_mode  # Store debug mode setting
 
         # Store original coordinates before any modifications
         self._store_original_coordinates()
@@ -106,7 +108,8 @@ class TranscriptSequence:
             
             # Use extended boundaries for extended transcripts
             if was_extended:
-                logging.debug(f"Using extended boundaries for transcript {self.transcript.transcript_id}")
+                if self.debug_mode:
+                    logging.debug(f"Using extended boundaries for transcript {self.transcript.transcript_id}")
                 
                 # For extended transcripts, use the entire range between min/max genomic positions
                 min_genomic_pos = min(self.transcript.genome_to_transcript.keys())
@@ -122,7 +125,8 @@ class TranscriptSequence:
                     
                     # For negative strand, do reverse complement
                     if self.transcript.strand == '-':
-                        logging.debug(f"Doing reverse complement for negative strand extended transcript "
+                        if self.debug_mode:
+                            logging.debug(f"Doing reverse complement for negative strand extended transcript "
                                     f"{self.transcript.transcript_id} (length: {len(full_seq)})")
                         full_seq = self._reverse_complement(full_seq)
                         
@@ -139,7 +143,8 @@ class TranscriptSequence:
                 sorted_exons = sorted(self.transcript.exons, 
                                     key=lambda x: x.genome_start, 
                                     reverse=True)
-                logging.debug(f"Sorted {len(sorted_exons)} exons for negative strand transcript "
+                if self.debug_mode:
+                    logging.debug(f"Sorted {len(sorted_exons)} exons for negative strand transcript "
                             f"{self.transcript.transcript_id}")
             
             for i, exon in enumerate(sorted_exons):
@@ -151,7 +156,8 @@ class TranscriptSequence:
                     
                     if self.transcript.strand == '-':
                         exon_seq = self._reverse_complement(exon_seq)
-                        logging.debug(f"Reverse complemented exon {i} for negative strand "
+                        if self.debug_mode:
+                            logging.debug(f"Reverse complemented exon {i} for negative strand "
                                     f"(length: {len(exon_seq)})")
                         
                     transcript_seq += exon_seq
@@ -161,7 +167,8 @@ class TranscriptSequence:
                     return ""
                     
             # Log sequence details
-            logging.debug(f"Extracted transcript sequence for {self.transcript.transcript_id}, "
+            if self.debug_mode:
+                logging.debug(f"Extracted transcript sequence for {self.transcript.transcript_id}, "
                         f"strand: {self.transcript.strand}, length: {len(transcript_seq)}")
                 
             return transcript_seq
@@ -208,7 +215,8 @@ class TranscriptSequence:
             uorf_seq = self.sequence[start:end]
             
             # Log details about uORF extraction
-            logging.debug(f"Extracted uORF region for {self.transcript.transcript_id}, "
+            if self.debug_mode:
+                logging.debug(f"Extracted uORF region for {self.transcript.transcript_id}, "
                         f"strand: {self.transcript.strand}, coordinates: {start+1}-{end}, "
                         f"length: {len(uorf_seq)}")
             
@@ -217,7 +225,7 @@ class TranscriptSequence:
                 return ""
                 
             # Check if uORF sequence has proper start/stop codons for debugging
-            if len(uorf_seq) >= 3:
+            if len(uorf_seq) >= 3 and self.debug_mode:
                 start_codon = uorf_seq[:3]
                 stop_codon = uorf_seq[-3:] if len(uorf_seq) >= 6 else None
                 logging.debug(f"uORF start codon: {start_codon}, stop codon: {stop_codon}")
@@ -252,7 +260,8 @@ class TranscriptSequence:
             was_extended = getattr(self.transcript, 'was_extended', False)
             strand = self.transcript.strand
             
-            logging.debug(f"Getting codon at position {transcript_pos} for transcript {self.transcript.transcript_id}, "
+            if self.debug_mode:
+                logging.debug(f"Getting codon at position {transcript_pos} for transcript {self.transcript.transcript_id}, "
                         f"strand: {strand}, extended: {was_extended}")
             
             # Check if position is outside uORF boundaries
@@ -262,13 +271,15 @@ class TranscriptSequence:
             if transcript_pos < self.transcript.uorf_start and near_start:
                 # Position is before uORF start but within 3 bp
                 codon = self.uorf_region[:3]
-                logging.debug(f"Position is near uORF start, using first codon: {codon}")
+                if self.debug_mode:
+                    logging.debug(f"Position is near uORF start, using first codon: {codon}")
                 return codon
                 
             if transcript_pos > self.transcript.uorf_end and near_end:
                 # Position is after uORF end but within 3 bp
                 codon = self.uorf_region[-3:]
-                logging.debug(f"Position is near uORF end, using last codon: {codon}")
+                if self.debug_mode:
+                    logging.debug(f"Position is near uORF end, using last codon: {codon}")
                 return codon
                 
             # For position within uORF, calculate codon based on reading frame
@@ -296,16 +307,17 @@ class TranscriptSequence:
             codon = self.uorf_region[codon_start:codon_end]
             
             # Additional logging for codon information
-            logging.debug(f"Retrieved codon for transcript position {transcript_pos}:")
-            logging.debug(f"  Relative position in uORF: {rel_pos}")
-            logging.debug(f"  Frame: {frame}")
-            logging.debug(f"  Codon indices in uORF: {codon_start}-{codon_end}")
-            logging.debug(f"  Codon: {codon}")
-            
-            # If dealing with negative strand, note that sequence is already reverse complemented
-            if strand == '-':
-                logging.debug(f"  Note: For negative strand, sequence is already reverse complemented")
-                logging.debug(f"  This codon represents 5' to 3' orientation on the transcript")
+            if self.debug_mode:
+                logging.debug(f"Retrieved codon for transcript position {transcript_pos}:")
+                logging.debug(f"  Relative position in uORF: {rel_pos}")
+                logging.debug(f"  Frame: {frame}")
+                logging.debug(f"  Codon indices in uORF: {codon_start}-{codon_end}")
+                logging.debug(f"  Codon: {codon}")
+                
+                # If dealing with negative strand, note that sequence is already reverse complemented
+                if strand == '-':
+                    logging.debug(f"  Note: For negative strand, sequence is already reverse complemented")
+                    logging.debug(f"  This codon represents 5' to 3' orientation on the transcript")
             
             return codon
                 

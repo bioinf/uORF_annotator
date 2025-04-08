@@ -115,26 +115,26 @@ class VariantAnnotator:
         )
         
         if self.debug_mode:
-            logging.info(f"*** STOP_LOST DEBUG INFO ***")
-            logging.info(f"Variant position: {variant_data['position']}")
-            logging.info(f"uORF coordinates: {variant_data['uorf_start']}-{variant_data['uorf_end']} (transcript)")
-            logging.info(f"mainCDS coordinates: {variant_data['maincds_start']}-{variant_data['maincds_end']} (transcript)")
-            logging.info(f"Original overlaps_maincds: {overlaps_maincds}")
+            logging.debug(f"*** STOP_LOST DEBUG INFO ***")
+            logging.debug(f"Variant position: {variant_data['position']}")
+            logging.debug(f"uORF coordinates: {variant_data['uorf_start']}-{variant_data['uorf_end']} (transcript)")
+            logging.debug(f"mainCDS coordinates: {variant_data['maincds_start']}-{variant_data['maincds_end']} (transcript)")
+            logging.debug(f"Original overlaps_maincds: {overlaps_maincds}")
         
         new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.STOP_LOST)
 
         if self.debug_mode:
             if new_stop_pos is not None:
-                logging.info(f"New stop codon found at transcript position: {new_stop_pos}")
-                logging.info(f"Stop codon: {stop_codon_info['codon']} at genomic position {stop_codon_info.get('genomic_pos', 'N/A')}")
-                logging.info(f"Frame: {stop_codon_info['frame']}")
+                logging.debug(f"New stop codon found at transcript position: {new_stop_pos}")
+                logging.debug(f"Stop codon: {stop_codon_info['codon']} at genomic position {stop_codon_info.get('genomic_pos', 'N/A')}")
+                logging.debug(f"Frame: {stop_codon_info['frame']}")
                 
                 if new_stop_pos < variant_data['maincds_start']:
-                    logging.info(f"New stop is BEFORE mainCDS start")
+                    logging.debug(f"New stop is BEFORE mainCDS start")
                 elif new_stop_pos > variant_data['maincds_start']:
-                    logging.info(f"New stop is AFTER mainCDS start")
+                    logging.debug(f"New stop is AFTER mainCDS start")
             else:
-                logging.info(f"No new stop codon found")
+                logging.debug(f"No new stop codon found")
         
         if overlaps_maincds:
             if new_stop_pos is None:
@@ -149,24 +149,24 @@ class VariantAnnotator:
         
         if new_stop_pos is None:
             if self.debug_mode:
-                logging.info(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
+                logging.debug(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
             self._write_bed_entry(len(self.transcript_seq.sequence), variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
             
         if new_stop_pos >= variant_data['maincds_start']:
             if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
                 if self.debug_mode:
-                    logging.info(f"New stop extends directly into mainCDS, N_TERMINAL_EXTENSION")
+                    logging.debug(f"New stop extends directly into mainCDS, N_TERMINAL_EXTENSION")
                 self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION)
                 return MainCDSImpact.N_TERMINAL_EXTENSION
             else:
                 if self.debug_mode:
-                    logging.info(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
+                    logging.debug(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
                 self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
                 return MainCDSImpact.OUT_OF_FRAME_OVERLAP
         else:
             if self.debug_mode:
-                logging.info(f"New stop before mainCDS, UORF_PRODUCT_TRUNCATION")
+                logging.debug(f"New stop before mainCDS, UORF_PRODUCT_TRUNCATION")
             return MainCDSImpact.UORF_PRODUCT_EXTENSION
 
     def _handle_frameshift(self, variant_data: Dict) -> MainCDSImpact:
@@ -261,51 +261,51 @@ class VariantAnnotator:
             strand = variant_data.get('strand', self.transcript_seq.transcript.strand)
             
             if self.debug_mode:
-                logging.info(f"Finding new stop codon for {uorf_consequence.name}")
-                logging.info(f"Variant position: {transcript_pos}, strand: {strand}")
-                logging.info(f"uORF coordinates: {uorf_start}-{uorf_end} (transcript)")
+                logging.debug(f"Finding new stop codon for {uorf_consequence.name}")
+                logging.debug(f"Variant position: {transcript_pos}, strand: {strand}")
+                logging.debug(f"uORF coordinates: {uorf_start}-{uorf_end} (transcript)")
                 if maincds_end:
-                    logging.info(f"mainCDS end: {maincds_end} (transcript)")
+                    logging.debug(f"mainCDS end: {maincds_end} (transcript)")
             
             # Determine where to start scanning for a new stop codon
             if uorf_consequence == UORFConsequence.STOP_LOST or uorf_consequence == UORFConsequence.FRAMESHIFT:
                 scan_start_pos = uorf_start - 1
                 if self.debug_mode:
-                    logging.info(f"Scanning from variant position: {scan_start_pos}")
+                    logging.debug(f"Scanning from variant position: {scan_start_pos}")
             else:
                 if self.debug_mode:
-                    logging.info(f"Consequence {uorf_consequence.name} doesn't require stop codon scanning")
+                    logging.debug(f"Consequence {uorf_consequence.name} doesn't require stop codon scanning")
                 return None, None
             
             # Get the sequence from scan position to end of transcript
             sequence = self._get_sequence_from_position(scan_start_pos)
             if not sequence:
                 if self.debug_mode:
-                    logging.info("No sequence retrieved for scanning")
+                    logging.debug("No sequence retrieved for scanning")
                 return None, None
             
             if self.debug_mode:
                 # Show first part of sequence to aid debugging
                 max_display = min(50, len(sequence))
-                logging.info(f"Scanning sequence: {sequence[:max_display]}... (length: {len(sequence)})")
+                logging.debug(f"Scanning sequence: {sequence[:max_display]}... (length: {len(sequence)})")
 
             ref_allele = variant_data.get('ref_allele', '')
             alt_allele = variant_data.get('alt_allele', '')
 
             if not ref_allele or not alt_allele:
                 if self.debug_mode:
-                    logging.info("Missing allele information for frameshift variant")
+                    logging.debug("Missing allele information for frameshift variant")
                 return None, None
 
             # REAL : Making necessary sequence changes
             relative_pos = transcript_pos - uorf_start
             if self.debug_mode:
-                logging.info("Amending transcript sequence to incorporate alternative allele")
+                logging.debug("Amending transcript sequence to incorporate alternative allele")
             if strand == "+":
                 if self.debug_mode:
-                    logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
-                    logging.info(f"Sequence up until site: {sequence[:relative_pos]}")
-                    logging.info(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
+                    logging.debug(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.debug(f"Sequence up until site: {sequence[:relative_pos]}")
+                    logging.debug(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
                 sequence = sequence[:relative_pos] + alt_allele + sequence[relative_pos + len(ref_allele):]
             else:
                 #complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
@@ -314,9 +314,9 @@ class VariantAnnotator:
                 #               for base in reversed(alt_allele))
 
                 if self.debug_mode:
-                    logging.info(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
-                    logging.info(f"Sequence up until site: {sequence[:relative_pos - len(ref_allele) + 1]}")
-                    logging.info(f"Sequence after site: {sequence[relative_pos + 1:]}")
+                    logging.debug(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.debug(f"Sequence up until site: {sequence[:relative_pos - len(ref_allele) + 1]}")
+                    logging.debug(f"Sequence after site: {sequence[relative_pos + 1:]}")
 
                 sequence = sequence[:relative_pos - len(ref_allele) + 1] + alt_allele + sequence[(relative_pos + 1):]
             
@@ -324,7 +324,7 @@ class VariantAnnotator:
             stop_pos, stop_info = self._find_next_stop_codon_enhanced(sequence, 1)
             if stop_pos is None:
                 if self.debug_mode:
-                    logging.info("No new stop codon found in sequence")
+                    logging.debug("No new stop codon found in sequence")
                 return None, None
                     
             # Calculate absolute transcript position
@@ -333,15 +333,15 @@ class VariantAnnotator:
             absolute_stop_pos = scan_start_pos + stop_pos - allele_length_shift + 3 # +2 for the full codon
             
             if self.debug_mode:
-                logging.info(f"New stop codon found at position {stop_pos} in scanning sequence")
-                logging.info(f"Absolute transcript position: {absolute_stop_pos}")
-                logging.info(f"Stop codon: {stop_info['codon']}")
+                logging.debug(f"New stop codon found at position {stop_pos} in scanning sequence")
+                logging.debug(f"Absolute transcript position: {absolute_stop_pos}")
+                logging.debug(f"Stop codon: {stop_info['codon']}")
                 
                 # Add genomic position if available
                 genomic_pos = self.transcript_seq.transcript.get_genomic_position(absolute_stop_pos)
                 if genomic_pos:
                     stop_info['genomic_pos'] = genomic_pos
-                    logging.info(f"Genomic position of stop codon: {genomic_pos}")
+                    logging.debug(f"Genomic position of stop codon: {genomic_pos}")
             
             # Store the transcript position in the stop info
             stop_info['transcript_pos'] = absolute_stop_pos
@@ -384,20 +384,20 @@ class VariantAnnotator:
         try:
             if not sequence:
                 if self.debug_mode:
-                    logging.info("Empty sequence provided for stop codon search")
+                    logging.debug("Empty sequence provided for stop codon search")
                 return None, None
                 
             if frame not in (0, 1, 2):
                 if self.debug_mode:
-                    logging.info(f"Invalid frame {frame} provided, must be 0, 1, or 2")
+                    logging.debug(f"Invalid frame {frame} provided, must be 0, 1, or 2")
                 return None, None
                 
             # Adjust the starting point based on the frame
             start = frame - 1
             
             if self.debug_mode:
-                logging.info(f"Looking for stop codons starting at offset {start} with frame {frame}")
-                logging.info(f"Stop codons to search for: {', '.join(self.STOP_CODONS)}")
+                logging.debug(f"Looking for stop codons starting at offset {start} with frame {frame}")
+                logging.debug(f"Stop codons to search for: {', '.join(self.STOP_CODONS)}")
             
             found_codons = []  # For debugging, track all codons checked
             
@@ -408,11 +408,11 @@ class VariantAnnotator:
                 # For debugging, track early codons
                 if i < 60 and self.debug_mode:
                     found_codons.append(f"{i}:{codon}")
-                    logging.info(f"Checking codon at position {i}: {codon}")
+                    logging.debug(f"Checking codon at position {i}: {codon}")
                 
                 if codon in self.STOP_CODONS:
                     if self.debug_mode:
-                        logging.info(f"Found stop codon {codon} at position {i}")
+                        logging.debug(f"Found stop codon {codon} at position {i}")
                     
                     stop_info = {
                         'codon': codon,
@@ -423,8 +423,8 @@ class VariantAnnotator:
             
             if self.debug_mode:
                 if found_codons:
-                    logging.info(f"Examined codons: {', '.join(found_codons)}")
-                logging.info(f"No stop codon found in the sequence")
+                    logging.debug(f"Examined codons: {', '.join(found_codons)}")
+                logging.debug(f"No stop codon found in the sequence")
                 
             return None, None
             
@@ -525,67 +525,67 @@ class VariantAnnotator:
             return "NA"
 
     def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
-        """Determine the consequence of a variant on the uORF."""
-        try:
-            required_fields = ['position', 'ref_allele', 'alt_allele']
-            for field in required_fields:
-                if field not in variant_data or variant_data[field] is None:
-                    return None
+            """Determine the consequence of a variant on the uORF."""
+            try:
+                required_fields = ['position', 'ref_allele', 'alt_allele']
+                for field in required_fields:
+                    if field not in variant_data or variant_data[field] is None:
+                        return None
 
-            pos = int(variant_data['position'])
-            ref = variant_data['ref_allele']
-            alt = variant_data['alt_allele']
-            
-            uorf_start = self.transcript_seq.transcript.uorf_start
-            uorf_end = self.transcript_seq.transcript.uorf_end
-            
-            near_start = abs(pos - uorf_start) <= 3
-            near_end = abs(pos - uorf_end) <= 3
-            
-            # Check if position is within the uORF or close to its boundaries
-            if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
-                return UORFConsequence.NON_CODING
-
-            if self._is_frameshift(ref, alt):
-                return UORFConsequence.FRAMESHIFT
-
-            codon_change = self.get_codon_change(variant_data)
-            if codon_change == "NA":
-                return UORFConsequence.NON_CODING
-
-            ref_codon, alt_codon = codon_change.split('>')
-
-            # Check start codon effect (always at beginning of uORF)
-            is_at_start = near_start or (pos >= uorf_start and pos < uorf_start + 3)
-            
-            if is_at_start and ref_codon in self.START_CODONS:
-                if alt_codon not in self.START_CODONS:
-                    return UORFConsequence.START_LOST
-
-            # Check stop codon effect (always at end of uORF)
-            is_at_end = near_end or (pos <= uorf_end and pos > uorf_end - 3)
-            
-            if is_at_end:
-                if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
-                    return UORFConsequence.STOP_LOST
-                if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
-                    return UORFConsequence.STOP_GAINED
-
-            # Check for stop codon anywhere in the uORF
-            if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
-                return UORFConsequence.STOP_GAINED
+                pos = int(variant_data['position'])
+                ref = variant_data['ref_allele']
+                alt = variant_data['alt_allele']
                 
-            # For single nucleotide variants inside uORF
-            if len(ref) == len(alt) == 1:
-                if self._is_synonymous(ref_codon, alt_codon):
-                    return UORFConsequence.SYNONYMOUS
-                return UORFConsequence.MISSENSE
+                uorf_start = self.transcript_seq.transcript.uorf_start
+                uorf_end = self.transcript_seq.transcript.uorf_end
+                
+                near_start = abs(pos - uorf_start) <= 3
+                near_end = abs(pos - uorf_end) <= 3
+                
+                # Check if position is within the uORF or close to its boundaries
+                if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+                    return UORFConsequence.NON_CODING
 
-            return UORFConsequence.NON_CODING
+                if self._is_frameshift(ref, alt):
+                    return UORFConsequence.FRAMESHIFT
 
-        except Exception as e:
-            logging.error(f"Error determining consequence: {str(e)}")
-            return None
+                codon_change = self.get_codon_change(variant_data)
+                if codon_change == "NA":
+                    return UORFConsequence.NON_CODING
+
+                ref_codon, alt_codon = codon_change.split('>')
+
+                # Check start codon effect (always at beginning of uORF)
+                is_at_start = near_start or (pos >= uorf_start and pos < uorf_start + 3)
+                
+                if is_at_start and ref_codon in self.START_CODONS:
+                    if alt_codon not in self.START_CODONS:
+                        return UORFConsequence.START_LOST
+
+                # Check stop codon effect (always at end of uORF)
+                is_at_end = near_end or (pos <= uorf_end and pos > uorf_end - 3)
+                
+                if is_at_end:
+                    if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                        return UORFConsequence.STOP_LOST
+                    if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                        return UORFConsequence.STOP_GAINED
+
+                # Check for stop codon anywhere in the uORF
+                if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
+                    return UORFConsequence.STOP_GAINED
+                    
+                # For single nucleotide variants inside uORF
+                if len(ref) == len(alt) == 1:
+                    if self._is_synonymous(ref_codon, alt_codon):
+                        return UORFConsequence.SYNONYMOUS
+                    return UORFConsequence.MISSENSE
+
+                return UORFConsequence.NON_CODING
+
+            except Exception as e:
+                logging.error(f"Error determining consequence: {str(e)}")
+                return None
 
     def _is_frameshift(self, ref: str, alt: str) -> bool:
         """Check if variant causes a frameshift."""
@@ -599,11 +599,11 @@ class VariantAnnotator:
                          variant_data : Dict,
                          main_cds_eff : MainCDSImpact):
         if self.debug_mode:
-            logging.info('Entered BED generation function!')
-            logging.info(f'Strand is {self.transcript_obj.strand}')
+            logging.debug('Entered BED generation function!')
+            logging.debug(f'Strand is {self.transcript_obj.strand}')
         if self.bed_file_path is None:
             if self.debug_mode:
-                logging.info('BED file path is not set, skipping')
+                logging.debug('BED file path is not set, skipping')
             pass
         else:
             # new_stop_pos += 1
@@ -631,7 +631,7 @@ class VariantAnnotator:
             for exon_number, current_exon in enumerate(transcript_exons):
                 current_exon_end = (current_exon_start + current_exon.length)
                 if self.debug_mode:
-                    logging.info(f"Processing exon with coordinates {current_exon_start}-{current_exon_end}, searching for stop codon at {new_stop_pos}. uORF start is at {uorf_start}")
+                    logging.debug(f"Processing exon with coordinates {current_exon_start}-{current_exon_end}, searching for stop codon at {new_stop_pos}. uORF start is at {uorf_start}")
 
                 # Correction for uORFs starting before transcript start
                 # TODO: ideally, this step has to be performed at transcript extension
@@ -639,12 +639,12 @@ class VariantAnnotator:
 
                     if (self.transcript_obj.strand == "+") and (uorf_start_genomic < current_exon.genome_start):
                         if self.debug_mode:
-                            logging.info(f"Normalizing coordinates for the first exon. Exon start is {current_exon.genome_start}, uORF genome start is {uorf_start_genomic}")
+                            logging.debug(f"Normalizing coordinates for the first exon. Exon start is {current_exon.genome_start}, uORF genome start is {uorf_start_genomic}")
                         current_exon.length += (current_exon.genome_start - uorf_start_genomic)
                         current_exon.genome_start = uorf_start_genomic
                     if (self.transcript_obj.strand == "-") and (uorf_end_genomic > current_exon.genome_end):
                         if self.debug_mode:
-                            logging.info(f"Normalizing coordinates for the first exon (reverse strand). Exon end is {current_exon.genome_end}, uORF genome end is {uorf_end_genomic}")
+                            logging.debug(f"Normalizing coordinates for the first exon (reverse strand). Exon end is {current_exon.genome_end}, uORF genome end is {uorf_end_genomic}")
                         current_exon.length += (uorf_end_genomic - current_exon.genome_end)
                         current_exon.genome_end = uorf_end_genomic
 
@@ -657,12 +657,12 @@ class VariantAnnotator:
                 if uorf_start >= current_exon_start:
                     uorf_start_offset = (uorf_start - current_exon_start)
                     if self.debug_mode:
-                        logging.info(f"Current exon contains uORF start, offset is {uorf_start_offset}")
+                        logging.debug(f"Current exon contains uORF start, offset is {uorf_start_offset}")
 
                 if new_stop_pos <= current_exon_end:
                     # If the stop codon is in the exon, calculate its position and block size (including offset)
                     if self.debug_mode:
-                        logging.info("Current exon contains stop codon, calculating final size and margins")
+                        logging.debug("Current exon contains stop codon, calculating final size and margins")
 
                     if self.transcript_obj.strand == "+":
                         final_genomic_end = current_exon.genome_start + (new_stop_pos - current_exon_start)
@@ -683,15 +683,15 @@ class VariantAnnotator:
             # If stop codon was not found, fill the margin with last exon boundary
             if final_genomic_start is None:
                 if self.debug_mode:
-                    logging.info("Start coordinate not found during iteration, setting to first exon genome start")
+                    logging.debug("Start coordinate not found during iteration, setting to first exon genome start")
                 final_genomic_start = current_exon.genome_start
             if final_genomic_end is None:
                 if self.debug_mode:
-                    logging.info("End coordinate not found during iteration, setting to first exon genome end")
+                    logging.debug("End coordinate not found during iteration, setting to first exon genome end")
                 final_genomic_end = current_exon.genome_end
 
             if self.debug_mode:
-                logging.info(f"Collected block data: {final_block_sizes}; {genomic_block_starts}")
+                logging.debug(f"Collected block data: {final_block_sizes}; {genomic_block_starts}")
 
             # Transform data about blocks for export
             prefinal_blocks = list(zip(genomic_block_starts, final_block_sizes))
@@ -699,7 +699,7 @@ class VariantAnnotator:
                 prefinal_blocks.reverse()
 
             if self.debug_mode:
-                logging.info("Normlizing block coordinates after collection")
+                logging.debug("Normlizing block coordinates after collection")
 
             final_block_starts = ""
             final_block_sizes = ""
@@ -708,7 +708,7 @@ class VariantAnnotator:
                 final_block_sizes += f"{block_len},"
 
             if self.debug_mode:
-                logging.info("Successfully collected block information before writing a BED entry")
+                logging.debug("Successfully collected block information before writing a BED entry")
 
             if main_cds_eff == MainCDSImpact.OUT_OF_FRAME_OVERLAP:
                 feature_color = '255,0,0'

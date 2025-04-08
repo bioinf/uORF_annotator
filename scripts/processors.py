@@ -174,7 +174,7 @@ class VariantProcessor:
                             logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
 
                     # Create TranscriptSequence object
-                    transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
+                    transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom, debug_mode=self.debug_mode)
                     if not transcript_seq.sequence:
                         if self.debug_mode:
                             logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
@@ -398,7 +398,7 @@ class VariantProcessor:
                                 logging.debug(f"Converted alleles for negative strand: {ref_allele}>{alt_allele} to {variant_ref}>{variant_alt}")
                             
                         # Create TranscriptSequence object
-                        transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom)
+                        transcript_seq = TranscriptSequence(transcript_obj, self.fasta, chrom, debug_mode=self.debug_mode)
                         if not transcript_seq.sequence:
                             if self.debug_mode:
                                 logging.debug(f"Could not extract transcript sequence for {transcript_id}, skipping")
@@ -571,34 +571,34 @@ class VariantProcessor:
         return f"{transcript_obj.chromosome}:{transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}"
     
     def _get_corrected_uorf_coordinates(self, transcript_obj, transcript_seq=None):
-        """
-        Get corrected uORF coordinates for output.
-        
-        Args:
-            transcript_obj: Transcript object containing coordinate information
-            transcript_seq: Optional TranscriptSequence object with stored original coordinates
+            """
+            Get corrected uORF coordinates for output.
             
-        Returns:
-            Tuple of (uorf_start_transcript, uorf_end_transcript)
-        """
-        # Use coordinates from Transcript directly
-        uorf_start = transcript_obj.uorf_start
-        uorf_end = transcript_obj.uorf_end
-        
-        # Validate coordinates
-        if uorf_start is None or uorf_end is None:
-            logging.warning(f"Missing uORF transcript coordinates for {transcript_obj.transcript_id}")
-            # Use genomic coordinates as fallbacks if needed
-            if uorf_start is None and transcript_obj.uorf_start_genomic is not None:
-                uorf_start = transcript_obj.get_transcript_position(transcript_obj.uorf_start_genomic)
-                if self.debug_mode:
-                    logging.debug(f"Using fallback for uORF start: {uorf_start}")
-            if uorf_end is None and transcript_obj.uorf_end_genomic is not None:
-                uorf_end = transcript_obj.get_transcript_position(transcript_obj.uorf_end_genomic)
-                if self.debug_mode:
-                    logging.debug(f"Using fallback for uORF end: {uorf_end}")
-        
-        return uorf_start, uorf_end
+            Args:
+                transcript_obj: Transcript object containing coordinate information
+                transcript_seq: Optional TranscriptSequence object with stored original coordinates
+                
+            Returns:
+                Tuple of (uorf_start_transcript, uorf_end_transcript)
+            """
+            # Use coordinates from Transcript directly
+            uorf_start = transcript_obj.uorf_start
+            uorf_end = transcript_obj.uorf_end
+            
+            # Validate coordinates
+            if uorf_start is None or uorf_end is None:
+                logging.warning(f"Missing uORF transcript coordinates for {transcript_obj.transcript_id}")
+                # Use genomic coordinates as fallbacks if needed
+                if uorf_start is None and transcript_obj.uorf_start_genomic is not None:
+                    uorf_start = transcript_obj.get_transcript_position(transcript_obj.uorf_start_genomic)
+                    if self.debug_mode:
+                        logging.debug(f"Using fallback for uORF start: {uorf_start}")
+                if uorf_end is None and transcript_obj.uorf_end_genomic is not None:
+                    uorf_end = transcript_obj.get_transcript_position(transcript_obj.uorf_end_genomic)
+                    if self.debug_mode:
+                        logging.debug(f"Using fallback for uORF end: {uorf_end}")
+            
+            return uorf_start, uorf_end
 
     def _log_debug_info(self, transcript_id, transcript_obj, vcf_pos):
         """Log debug information about transcript coordinates."""
