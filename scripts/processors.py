@@ -307,6 +307,7 @@ class VariantProcessor:
             'rsid': rsid,
             'full_uorf_name': bed_full_name,
             'position': variant_coords.transcript,
+            'position_genomic': vcf_pos,
             'ref_allele': variant_ref,
             'alt_allele': variant_alt,
             'strand': transcript_obj.strand,

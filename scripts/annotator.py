@@ -137,32 +137,43 @@ class VariantAnnotator:
                 logging.debug(f"No new stop codon found")
         
         if overlaps_maincds:
+            #var_in_maincds = False
+            var_in_maincds = (variant_data['position'] >= variant_data['mmaincds_start'])
             if new_stop_pos is None:
+                if not var_in_maincds:
+                    self._write_bed_entry(len(self.transcript_seq.sequence), variant_data,
+                                    MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.OVERLAP_EXTENSION
                 
             if new_stop_pos > variant_data['uorf_end']:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.OVERLAP_EXTENSION
             elif new_stop_pos < variant_data['maincds_start']:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_ELIMINATION, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.OVERLAP_ELIMINATION
             else:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_TRUNCATION, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.OVERLAP_TRUNCATION
         
         if new_stop_pos is None:
             if self.debug_mode:
                 logging.debug(f"No new stop found, assuming OUT_OF_FRAME_OVERLAP")
-            self._write_bed_entry(len(self.transcript_seq.sequence), variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
+            self._write_bed_entry(len(self.transcript_seq.sequence), variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP, UORFConsequence.STOP_LOST)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
             
         if new_stop_pos >= variant_data['maincds_start']:
             if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
                 if self.debug_mode:
                     logging.debug(f"New stop extends directly into mainCDS, N_TERMINAL_EXTENSION")
-                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION)
+                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.N_TERMINAL_EXTENSION
             else:
                 if self.debug_mode:
                     logging.debug(f"New stop extends into mainCDS, OUT_OF_FRAME_OVERLAP")
-                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
+                self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP, UORFConsequence.STOP_LOST)
                 return MainCDSImpact.OUT_OF_FRAME_OVERLAP
         else:
             if self.debug_mode:
@@ -191,27 +202,38 @@ class VariantAnnotator:
             new_stop_pos = len(self.transcript_seq.sequence)
         
         if overlaps_maincds:
+            var_in_maincds = (variant_data['position'] >= variant_data['maincds_start'])
             original_stop = variant_data['uorf_end']
             
             if new_stop_pos > maincds_end:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.FRAMESHIFT)
                 return MainCDSImpact.OVERLAP_EXTENSION
                 
             if new_stop_pos < variant_data['maincds_start']:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_ELIMINATION, UORFConsequence.FRAMESHIFT)
                 return MainCDSImpact.OVERLAP_ELIMINATION
             elif new_stop_pos < original_stop:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_TRUNCATION, UORFConsequence.FRAMESHIFT)
                 return MainCDSImpact.OVERLAP_TRUNCATION
             elif new_stop_pos > original_stop:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.FRAMESHIFT)
                 return MainCDSImpact.OVERLAP_EXTENSION
             else:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.FRAMESHIFT)
                 return MainCDSImpact.OVERLAP_EXTENSION
         
         if new_stop_pos < maincds_start:
             return MainCDSImpact.UORF_PRODUCT_EXTENSION
         elif new_stop_pos == maincds_end:
-            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION)
+            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.N_TERMINAL_EXTENSION, UORFConsequence.FRAMESHIFT)
             return MainCDSImpact.N_TERMINAL_EXTENSION
         else:
-            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP)
+            self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP, UORFConsequence.FRAMESHIFT)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
 
     def _handle_stop_gained(self, variant_data: Dict) -> MainCDSImpact:
@@ -223,11 +245,17 @@ class VariantAnnotator:
         # For overlapping uORFs, a stop gain could truncate the overlap
         if overlaps_maincds:
             position = variant_data['position']
+            new_stop_pos = (position // 3) * 3 + 3
+            var_in_maincds = (variant_data['position'] >= variant_data['maincds_start'])
             
-            if position < variant_data['maincds_start']:
-                return MainCDSImpact.OVERLAP_TRUNCATION
+            if new_stop_pos < variant_data['maincds_start']:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_ELIMINATION, UORFConsequence.STOP_GAINED)
+                return MainCDSImpact.OVERLAP_ELIMINATION
             
-            if position >= variant_data['maincds_start'] and position < variant_data['uorf_end']:
+            if new_stop_pos >= variant_data['maincds_start'] and new_stop_pos < variant_data['uorf_end']:
+                if not var_in_maincds:
+                    self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OVERLAP_TRUNCATION, UORFConsequence.STOP_GAINED)
                 return MainCDSImpact.OVERLAP_TRUNCATION
         
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
@@ -597,7 +625,8 @@ class VariantAnnotator:
 
     def _write_bed_entry(self, new_stop_pos : int,
                          variant_data : Dict,
-                         main_cds_eff : MainCDSImpact):
+                         main_cds_eff : MainCDSImpact,
+                         uorf_consequence : UORFConsequence):
         if self.debug_mode:
             logging.debug('Entered BED generation function!')
             logging.debug(f'Strand is {self.transcript_obj.strand}')
@@ -613,7 +642,14 @@ class VariantAnnotator:
             uorf_end_genomic = variant_data['uorf_end_genomic']
             full_uorf_name = variant_data['full_uorf_name']
             rsid = variant_data['rsid']
-            feature_name = f'{rsid}|{main_cds_eff.name}|{full_uorf_name}'
+
+            genomic_pos = variant_data['position_genomic']
+            ref_allele = variant_data['ref_allele']
+            alt_allele = variant_data['alt_allele']
+            conseq_name = uorf_consequence.name
+            # TODO: add coordinates of a variant here
+            full_var_id = f'{chrom}-{genomic_pos}-{ref_allele}-{alt_allele}'
+            feature_name = f'{full_var_id}|{conseq_name}|{rsid}|{main_cds_eff.name}|{full_uorf_name}'
 
             transcript_exons = self.transcript_obj.exons.copy()
             if self.transcript_obj.strand == '-':
@@ -649,7 +685,8 @@ class VariantAnnotator:
                         current_exon.genome_end = uorf_end_genomic
 
                 # Skip exons before uORF start
-                if uorf_start > current_exon_end:
+                if uorf_start > current_exon_end or new_stop_pos < current_exon_start:
+                    current_exon_start += current_exon.length
                     continue
 
                 # If uORF starts in the current exon, calculate the offset (uORF start relative to exon)
@@ -710,10 +747,12 @@ class VariantAnnotator:
             if self.debug_mode:
                 logging.debug("Successfully collected block information before writing a BED entry")
 
-            if main_cds_eff == MainCDSImpact.OUT_OF_FRAME_OVERLAP:
+            if main_cds_eff == MainCDSImpact.OUT_OF_FRAME_OVERLAP or main_cds_eff == MainCDSImpact.OVERLAP_EXTENSION:
                 feature_color = '255,0,0'
             elif main_cds_eff == MainCDSImpact.N_TERMINAL_EXTENSION:
                 feature_color = '255,128,0'
+            elif main_cds_eff == MainCDSImpact.OVERLAP_ELIMINATION or main_cds_eff == MainCDSImpact.OVERLAP_TRUNCATION :
+                feature_color = '0,255,0'
             else:
                 logging.warning("Attempted to generate BED entry for non-relevant impact, skipping")
                 return ""
