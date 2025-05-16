@@ -6,6 +6,7 @@ chr1	7	rs1	C	T	.	PASS	TYPE=non_coding_variant;MAIN_ORF_EFF=NA
 chr1	30	rs20	T	G	.	PASS	TYPE=start_lost|stop_lost;MAIN_CDS_EFF=NA|out-of-frame_overlap
 chr1	34	rs2	A	G	.	PASS	TYPE=synonymous_variant;MAIN_ORF_EFF=NA
 chr1	34	rs3	A	T	.	PASS	TYPE=missense_variant;MAIN_ORF_EFF=NA
+chr1	34	rs25	ACCC	A	.	PASS	TYPE=inframe_deletion;MAIN_ORF_EFF=NA
 chr1	35	rs4	C	CC	.	PASS	TYPE=frameshift;MAIN_ORF_EFF=N-terminal_extension
 chr1	38	rs5	T	A	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=out-of-frame_overlap
 chr1	128	rs6	A	T	.	PASS	TYPE=stop_lost;MAIN_CDS_EFF=overlap_extension
