@@ -10,11 +10,14 @@ from annotator import VariantAnnotator, UORFConsequence, MainCDSImpact
 from transcript_sequence import TranscriptSequence
 
 class VariantProcessor:
-    def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile, bed_output: str = None, debug_mode: bool = False):
+    def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile, 
+                bed_output: str = None, exclude_maincds_variants: bool = False, 
+                debug_mode: bool = False):
         """Initialize the variant processor with coordinate converter and reference sequence."""
         self.converter = converter
         self.fasta = fasta
         self.bed_output = bed_output
+        self.exclude_maincds_variants = exclude_maincds_variants
         self.debug_mode = debug_mode
         self.annotator = None
         self.debug_info = {}
@@ -134,7 +137,13 @@ class VariantProcessor:
                         # Add result and update processed_positions
                         if 'Transcript_Position' in result:
                             processed_positions.add(result['Transcript_Position'])
+                            # Check if we should exclude variants in main CDS
                         
+                        if self.exclude_maincds_variants and result.get('Variant_In_MainCDS') == 'Yes':
+                            if self.debug_mode:
+                                logging.debug(f"Skipping variant in main CDS for transcript-uORF: {transcript_id}")
+                            continue
+
                         # Check for duplicates before adding
                         result_id = self._create_result_identifier(result)
                         if not any(result_id == self._create_result_identifier(r) for r in results):
@@ -164,6 +173,13 @@ class VariantProcessor:
                             vcf_info=vcf_info
                         )
                         if result:
+
+                            # Check if we should exclude variants in main CDS
+                            if self.exclude_maincds_variants and result.get('Variant_In_MainCDS') == 'Yes':
+                                if self.debug_mode:
+                                    logging.debug(f"Skipping variant in main CDS for extended transcript-uORF: {transcript_id}")
+                                continue
+
                             # Check for duplicates before adding
                             result_id = self._create_result_identifier(result)
                             if not any(result_id == self._create_result_identifier(r) for r in results):
@@ -307,6 +323,15 @@ class VariantProcessor:
             'alt_allele': variant_alt
         })
 
+        # Determine if the variant is inside the main CDS region
+        is_variant_in_maincds = False
+        if (transcript_obj.mainorf_start is not None and transcript_obj.mainorf_end is not None and
+            variant_coords.transcript >= transcript_obj.mainorf_start and 
+            variant_coords.transcript <= transcript_obj.mainorf_end):
+            is_variant_in_maincds = True
+            if self.debug_mode:
+                logging.debug(f"Variant at position {variant_coords.transcript} is inside mainCDS region")
+
         # Log detailed information about codon processing
         if self.debug_mode:
             logging.debug(f"Codon processing details for {transcript_id}:")
@@ -342,7 +367,8 @@ class VariantProcessor:
             'transcript_extended': is_extended,  # This should reflect extended status
             'start_codon_type': start_codon_type,  # Add start codon type information
             'start_codon': start_codon,  # Add actual start codon sequence
-            'vcf_info': vcf_info  # Add VCF INFO field
+            'vcf_info': vcf_info,  # Add VCF INFO field
+            'is_variant_in_maincds': is_variant_in_maincds
         }
 
         # Get consequences and impacts
@@ -398,6 +424,7 @@ class VariantProcessor:
             'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
             'Start_Codon_Type': start_codon_type,  # Add start codon type to the result
             'Start_Codon': start_codon,  # Add actual start codon sequence to the result
+            'Variant_In_MainCDS': 'Yes' if is_variant_in_maincds else 'No',
             'VCF_INFO': vcf_info  # Add VCF INFO field to the result
         }
         

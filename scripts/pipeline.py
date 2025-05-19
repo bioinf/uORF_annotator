@@ -14,7 +14,8 @@ class Pipeline:
     """Main pipeline for variant analysis and annotation."""
     
     def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str, 
-                 output_prefix: str, uorf_type: str = "ALL", debug_mode: bool = False):
+                output_prefix: str, uorf_type: str = "ALL", exclude_maincds_variants: bool = False,
+                debug_mode: bool = False):
         """Initialize pipeline with input files."""
         self.bed_file = bed_file
         self.vcf_file = vcf_file
@@ -22,6 +23,7 @@ class Pipeline:
         self.output_prefix = output_prefix
         self.debug_mode = debug_mode
         self.uorf_type = uorf_type.upper()  # Store the uORF type option
+        self.exclude_maincds_variants = exclude_maincds_variants  # Store the flag for exclusion
         
         # Validate uORF type value
         if self.uorf_type not in ["ALL", "ATG", "NON-ATG"]:
@@ -38,9 +40,10 @@ class Pipeline:
         # Use a copy of the bed file for analysis to avoid file handle issues
         self.converter = CoordinateConverter(bed_file, gtf_file, uorf_type=self.uorf_type, debug_mode=debug_mode)
         
-        # Initialize the processor with the output BED file path
-        # but don't create the file until we're ready to write to it
-        self.processor = VariantProcessor(self.converter, self.fasta, bed_output=self.bed_output, debug_mode=debug_mode)
+        # Initialize the processor with the output BED file path and the exclusion flag
+        self.processor = VariantProcessor(self.converter, self.fasta, bed_output=self.bed_output, 
+                                        exclude_maincds_variants=self.exclude_maincds_variants,
+                                        debug_mode=debug_mode)
 
     def process_variants(self) -> pd.DataFrame:
         """Process and annotate variants."""
@@ -170,7 +173,8 @@ def main():
     # Add uORF type filter argument
     parser.add_argument('--uorf-type', default='ALL', choices=['ALL', 'ATG', 'NON-ATG'], 
                        help='Filter uORFs by start codon type (ALL, ATG, or NON-ATG). Default: ALL')
-    
+    parser.add_argument('--exclude-maincds-variants', action='store_true', 
+                       help='Exclude variants that are located within the main CDS region')
     # Add debug mode argument
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
@@ -197,7 +201,8 @@ def main():
             
         logging.info("Initializing pipeline...")
         pipeline = Pipeline(args.bed, args.vcf, args.gtf, args.fasta, output_prefix, 
-                           uorf_type=args.uorf_type, debug_mode=args.debug)
+                        uorf_type=args.uorf_type, exclude_maincds_variants=args.exclude_maincds_variants,
+                        debug_mode=args.debug)
         
         logging.info("Processing variants...")
         results = pipeline.process_variants()
