@@ -329,8 +329,13 @@ class VariantProcessor:
         # Get consequences and impacts
         uorf_consequence = self.annotator.get_consequence(variant_data)
         maincds_impact = None
-        if uorf_consequence:
-            maincds_impact = self.annotator.predict_impact(variant_data, uorf_consequence)
+        
+        if uorf_consequence is None:
+            if self.debug_mode:
+                logging.debug(f"Variant at position {variant_coords.transcript} skipped: no significant consequence detected")
+            return None
+
+        maincds_impact = self.annotator.predict_impact(variant_data, uorf_consequence)
         
         # Get corrected uORF coordinates that reflect biological reality
         uorf_start_transcript, uorf_end_transcript = self._get_corrected_uorf_coordinates(
@@ -369,7 +374,7 @@ class VariantProcessor:
             'mainCDS_Start_Transcript': maincds_start_transcript,
             'mainCDS_End_Transcript': maincds_end_transcript,
             'Codon_Change': codon_change,
-            'uORF_Consequence': uorf_consequence.value if uorf_consequence else 'None',
+            'uORF_Consequence': uorf_consequence.value,
             'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
             'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
             'Start_Codon_Type': start_codon_type,  # Add start codon type to the result

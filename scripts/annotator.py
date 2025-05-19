@@ -11,7 +11,6 @@ class UORFConsequence(Enum):
     MISSENSE = "uorf_missense"
     SYNONYMOUS = "uorf_synonymous"
     SPLICE_REGION = "uorf_splice_region"
-    NON_CODING = "non_coding"
 
 
 class MainCDSImpact(Enum):
@@ -67,7 +66,6 @@ class VariantAnnotator:
             UORFConsequence.FRAMESHIFT: self._handle_frameshift,
             UORFConsequence.STOP_GAINED: self._handle_stop_gained,
             UORFConsequence.SPLICE_REGION: self._handle_splice_region,
-            UORFConsequence.NON_CODING: self._handle_non_coding
         }
 
     def does_overlap_maincds(self, uorf_end, maincds_start) -> bool:
@@ -262,10 +260,6 @@ class VariantAnnotator:
 
     def _handle_splice_region(self, variant_data: Dict) -> MainCDSImpact:
         """Handle splice region variants."""
-        return MainCDSImpact.MAIN_CDS_UNAFFECTED
-
-    def _handle_non_coding(self, variant_data: Dict) -> MainCDSImpact:
-        """Handle non-coding variants."""
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _find_new_stop_codon_position_enhanced(self, variant_data: Dict, 
@@ -479,9 +473,8 @@ class VariantAnnotator:
                 logging.debug(f"get_codon_change input: pos={pos}, ref={ref}, alt={alt}")
 
             if len(ref) != len(alt):
-                if self.debug_mode:
-                    logging.debug(f"Different allele lengths: ref={len(ref)}, alt={len(alt)}, returning NA")
-                return "NA"
+                if self._is_frameshift(ref, alt):
+                    return "FRAMESHIFT"
 
             # Get the codon containing this position
             ref_codon = self.transcript_seq.get_codon_at_position(pos)
@@ -570,16 +563,15 @@ class VariantAnnotator:
                 near_start = abs(pos - uorf_start) <= 3
                 near_end = abs(pos - uorf_end) <= 3
                 
-                # Check if position is within the uORF or close to its boundaries
-                if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
-                    return UORFConsequence.NON_CODING
-
                 if self._is_frameshift(ref, alt):
                     return UORFConsequence.FRAMESHIFT
+                
+                if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+                    return None
 
                 codon_change = self.get_codon_change(variant_data)
-                if codon_change == "NA":
-                    return UORFConsequence.NON_CODING
+                if codon_change == "NA" or codon_change == "FRAMESHIFT":
+                    return None
 
                 ref_codon, alt_codon = codon_change.split('>')
 
@@ -608,8 +600,7 @@ class VariantAnnotator:
                     if self._is_synonymous(ref_codon, alt_codon):
                         return UORFConsequence.SYNONYMOUS
                     return UORFConsequence.MISSENSE
-
-                return UORFConsequence.NON_CODING
+                return None
 
             except Exception as e:
                 logging.error(f"Error determining consequence: {str(e)}")
