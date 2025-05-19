@@ -11,6 +11,8 @@ class UORFConsequence(Enum):
     MISSENSE = "uorf_missense"
     SYNONYMOUS = "uorf_synonymous"
     SPLICE_REGION = "uorf_splice_region"
+    INFRAME_DELETION = "uorf_inframe_deletion"
+    INFRAME_INSERTION = "uorf_inframe_insertion"
 
 
 class MainCDSImpact(Enum):
@@ -66,6 +68,8 @@ class VariantAnnotator:
             UORFConsequence.FRAMESHIFT: self._handle_frameshift,
             UORFConsequence.STOP_GAINED: self._handle_stop_gained,
             UORFConsequence.SPLICE_REGION: self._handle_splice_region,
+            UORFConsequence.INFRAME_DELETION: self._handle_inframe_indel,
+            UORFConsequence.INFRAME_INSERTION: self._handle_inframe_indel,
         }
 
     def does_overlap_maincds(self, uorf_end, maincds_start) -> bool:
@@ -90,6 +94,56 @@ class VariantAnnotator:
         except Exception as e:
             logging.error(f"Error predicting mainCDS impact: {str(e)}")
             return None
+
+    def _handle_inframe_indel(self, variant_data: Dict) -> MainCDSImpact:
+        """Handle inframe insertion and deletion variants."""
+        overlaps_maincds = self.does_overlap_maincds(
+            variant_data['uorf_end'], variant_data['maincds_start']
+        )
+        
+        # For inframe indels, check if they introduce a premature stop
+        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(
+            variant_data, 
+            UORFConsequence.INFRAME_DELETION if len(variant_data['ref_allele']) > len(variant_data['alt_allele']) 
+            else UORFConsequence.INFRAME_INSERTION
+        )
+        
+        # If variant is in an overlapping uORF, check effects on overlap
+        if overlaps_maincds:
+            var_in_maincds = (variant_data['position'] >= variant_data['maincds_start'])
+            original_stop = variant_data['uorf_end']
+            
+            if new_stop_pos is not None:
+                if new_stop_pos < variant_data['maincds_start']:
+                    if not var_in_maincds:
+                        self._write_bed_entry(
+                            new_stop_pos, variant_data, 
+                            MainCDSImpact.OVERLAP_ELIMINATION, 
+                            UORFConsequence.INFRAME_DELETION if len(variant_data['ref_allele']) > len(variant_data['alt_allele'])
+                            else UORFConsequence.INFRAME_INSERTION
+                        )
+                    return MainCDSImpact.OVERLAP_ELIMINATION
+                elif new_stop_pos < original_stop:
+                    if not var_in_maincds:
+                        self._write_bed_entry(
+                            new_stop_pos, variant_data, 
+                            MainCDSImpact.OVERLAP_TRUNCATION, 
+                            UORFConsequence.INFRAME_DELETION if len(variant_data['ref_allele']) > len(variant_data['alt_allele'])
+                            else UORFConsequence.INFRAME_INSERTION
+                        )
+                    return MainCDSImpact.OVERLAP_TRUNCATION
+                elif new_stop_pos > original_stop:
+                    if not var_in_maincds:
+                        self._write_bed_entry(
+                            new_stop_pos, variant_data, 
+                            MainCDSImpact.OVERLAP_EXTENSION, 
+                            UORFConsequence.INFRAME_DELETION if len(variant_data['ref_allele']) > len(variant_data['alt_allele'])
+                            else UORFConsequence.INFRAME_INSERTION
+                        )
+                    return MainCDSImpact.OVERLAP_EXTENSION
+        
+        # In most cases, inframe indels don't affect the main CDS
+        return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _handle_missense_synonymous(self, variant_data: Dict) -> MainCDSImpact:
         """Handle missense and synonymous variants."""
@@ -546,65 +600,108 @@ class VariantAnnotator:
             return "NA"
 
     def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
-            """Determine the consequence of a variant on the uORF."""
-            try:
-                required_fields = ['position', 'ref_allele', 'alt_allele']
-                for field in required_fields:
-                    if field not in variant_data or variant_data[field] is None:
-                        return None
-
-                pos = int(variant_data['position'])
-                ref = variant_data['ref_allele']
-                alt = variant_data['alt_allele']
-                
-                uorf_start = self.transcript_seq.transcript.uorf_start
-                uorf_end = self.transcript_seq.transcript.uorf_end
-                
-                near_start = abs(pos - uorf_start) <= 3
-                near_end = abs(pos - uorf_end) <= 3
-                
-                if self._is_frameshift(ref, alt):
-                    return UORFConsequence.FRAMESHIFT
-                
-                if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+        """Determine the consequence of a variant on the uORF."""
+        try:
+            required_fields = ['position', 'ref_allele', 'alt_allele']
+            for field in required_fields:
+                if field not in variant_data or variant_data[field] is None:
                     return None
 
-                codon_change = self.get_codon_change(variant_data)
-                if codon_change == "NA" or codon_change == "FRAMESHIFT":
-                    return None
+            pos = int(variant_data['position'])
+            ref = variant_data['ref_allele']
+            alt = variant_data['alt_allele']
+            
+            uorf_start = self.transcript_seq.transcript.uorf_start
+            uorf_end = self.transcript_seq.transcript.uorf_end
+            
+            near_start = abs(pos - uorf_start) <= 3
+            near_end = abs(pos - uorf_end) <= 3
+            
+            # Check for frameshift first
+            if self._is_frameshift(ref, alt):
+                return UORFConsequence.FRAMESHIFT
+            
+            # Check if variant is outside uORF and not near boundaries
+            if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+                return None
 
-                ref_codon, alt_codon = codon_change.split('>')
-
-                # Check start codon effect (always at beginning of uORF)
-                is_at_start = near_start or (pos >= uorf_start and pos < uorf_start + 3)
-                
-                if is_at_start and ref_codon in self.START_CODONS:
-                    if alt_codon not in self.START_CODONS:
-                        return UORFConsequence.START_LOST
-
-                # Check stop codon effect (always at end of uORF)
-                is_at_end = near_end or (pos <= uorf_end and pos > uorf_end - 3)
-                
-                if is_at_end:
-                    if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
-                        return UORFConsequence.STOP_LOST
-                    if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
-                        return UORFConsequence.STOP_GAINED
-
-                # Check for stop codon anywhere in the uORF
-                if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
-                    return UORFConsequence.STOP_GAINED
+            # For inframe indels that aren't frameshifts
+            if len(ref) != len(alt):
+                # We already know it's not a frameshift, so it must be an inframe indel
+                # First determine if it's an insertion or deletion
+                if len(ref) < len(alt):
+                    inframe_consequence = UORFConsequence.INFRAME_INSERTION
+                else:
+                    inframe_consequence = UORFConsequence.INFRAME_DELETION
                     
-                # For single nucleotide variants inside uORF
-                if len(ref) == len(alt) == 1:
-                    if self._is_synonymous(ref_codon, alt_codon):
-                        return UORFConsequence.SYNONYMOUS
-                    return UORFConsequence.MISSENSE
+                # Determine if it's near start or end codons first
+                if near_start:
+                    codon_change = self.get_codon_change(variant_data)
+                    if codon_change != "NA":
+                        ref_codon, alt_codon = codon_change.split('>')
+                        if ref_codon in self.START_CODONS and alt_codon not in self.START_CODONS:
+                            return UORFConsequence.START_LOST
+                
+                if near_end:
+                    codon_change = self.get_codon_change(variant_data)
+                    if codon_change != "NA":
+                        ref_codon, alt_codon = codon_change.split('>')
+                        if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                            return UORFConsequence.STOP_LOST
+                        if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                            return UORFConsequence.STOP_GAINED
+                
+                # Check if any newly introduced codon is a stop codon
+                codon_change = self.get_codon_change(variant_data)
+                if codon_change != "NA" and codon_change != "FRAMESHIFT":
+                    ref_codon, alt_codon = codon_change.split('>')
+                    if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
+                        return UORFConsequence.STOP_GAINED
+                
+                # For all other inframe indels, classify as inframe insertion/deletion
+                return inframe_consequence
+
+            # Get codon change for all other cases
+            codon_change = self.get_codon_change(variant_data)
+            if codon_change == "NA" or codon_change == "FRAMESHIFT":
                 return None
 
-            except Exception as e:
-                logging.error(f"Error determining consequence: {str(e)}")
-                return None
+            ref_codon, alt_codon = codon_change.split('>')
+
+            # Check start codon effect (always at beginning of uORF)
+            is_at_start = near_start or (pos >= uorf_start and pos < uorf_start + 3)
+            
+            if is_at_start and ref_codon in self.START_CODONS:
+                if alt_codon not in self.START_CODONS:
+                    return UORFConsequence.START_LOST
+
+            # Check stop codon effect (always at end of uORF)
+            is_at_end = near_end or (pos <= uorf_end and pos > uorf_end - 3)
+            
+            if is_at_end:
+                if ref_codon in self.STOP_CODONS and alt_codon not in self.STOP_CODONS:
+                    return UORFConsequence.STOP_LOST
+                if ref_codon not in self.STOP_CODONS and alt_codon in self.STOP_CODONS:
+                    return UORFConsequence.STOP_GAINED
+
+            # Check for stop codon anywhere in the uORF
+            if alt_codon in self.STOP_CODONS and ref_codon not in self.STOP_CODONS:
+                return UORFConsequence.STOP_GAINED
+                
+            # For single nucleotide variants inside uORF
+            if len(ref) == len(alt) == 1:
+                if self._is_synonymous(ref_codon, alt_codon):
+                    return UORFConsequence.SYNONYMOUS
+                return UORFConsequence.MISSENSE
+                
+            # For other variants with same length but not SNVs (e.g., MNVs)
+            if self._is_synonymous(ref_codon, alt_codon):
+                return UORFConsequence.SYNONYMOUS
+            return UORFConsequence.MISSENSE
+
+        except Exception as e:
+            logging.error(f"Error determining consequence: {str(e)}")
+            return None
 
     def _is_frameshift(self, ref: str, alt: str) -> bool:
         """Check if variant causes a frameshift."""
