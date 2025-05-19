@@ -87,13 +87,19 @@ class VariantProcessor:
                 # Extract transcript ID
                 original_transcript_id = self._extract_transcript_id(bed_full_name)
                 
+                # Check for large indels that might cross boundaries
+                is_large_indel = len(ref_allele) > 1 or len(alt_allele) > 1
+                
+                if is_large_indel and self.debug_mode:
+                    logging.debug(f"Processing large indel: {ref_allele}>{alt_allele} at position {vcf_pos}")
+                
                 # Find all matching transcripts for this BED entry
                 matching_transcripts = []
                 for tid, transcript_obj in self.converter.transcripts.items():
                     # Check if this transcript corresponds to this BED entry
                     if (tid == original_transcript_id or tid.startswith(f"{original_transcript_id}_uorf_")) and \
-                       transcript_obj.uorf_start_genomic == bed_start + 1 and \
-                       transcript_obj.uorf_end_genomic == bed_end:
+                    transcript_obj.uorf_start_genomic == bed_start + 1 and \
+                    transcript_obj.uorf_end_genomic == bed_end:
                         matching_transcripts.append(tid)
                 
                 if not matching_transcripts:
@@ -256,7 +262,41 @@ class VariantProcessor:
                             f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
                             f"for {'extended' if is_extended else ''} transcript {transcript_id}, skipping")
                 return None  # Skip to next transcript
-        
+
+            if not is_within_uorf and (len(ref_allele) > 1 or len(alt_allele) > 1):
+                # For large indels, check if they cross uORF boundaries
+                if self.debug_mode:
+                    logging.debug(f"Large indel outside uORF, checking boundary intersection: {ref_allele}>{alt_allele}")
+                
+                # Determine indel boundaries in genomic coordinates
+                indel_start = vcf_pos
+                indel_end = vcf_pos + len(ref_allele) - 1 if len(ref_allele) > len(alt_allele) else vcf_pos
+                
+                # Check if indel crosses uORF boundaries
+                crosses_start = (indel_start < transcript_obj.uorf_start_genomic and 
+                                indel_end >= transcript_obj.uorf_start_genomic)
+                crosses_end = (indel_start <= transcript_obj.uorf_end_genomic and 
+                            indel_end > transcript_obj.uorf_end_genomic)
+                
+                if crosses_start or crosses_end:
+                    is_within_uorf = True  # Treat as within uORF for processing purposes
+                    if self.debug_mode:
+                        if crosses_start:
+                            logging.debug(f"Indel crosses uORF start boundary")
+                        if crosses_end:
+                            logging.debug(f"Indel crosses uORF end boundary")
+            if len(ref_allele) > 1 or len(alt_allele) > 1:
+                if self.debug_mode:
+                    logging.debug(f"Processing large indel: {ref_allele}>{alt_allele} at position {vcf_pos}")
+                    logging.debug(f"uORF genomic coordinates: {transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}")
+                    
+                    # Check if indel potentially crosses uORF boundaries
+                    indel_end = vcf_pos + len(ref_allele) - 1 if len(ref_allele) > 1 else vcf_pos
+                    if ((vcf_pos < transcript_obj.uorf_start_genomic and indel_end >= transcript_obj.uorf_start_genomic) or
+                        (vcf_pos <= transcript_obj.uorf_end_genomic and indel_end > transcript_obj.uorf_end_genomic)):
+                        logging.debug(f"Large indel potentially crosses uORF boundary")
+                        logging.debug(f"Indel boundaries: {vcf_pos}-{indel_end}")
+
         # Get transcript position for the variant
         variant_coords = transcript_obj.get_coordinates(vcf_pos)
         if not variant_coords:
@@ -364,10 +404,10 @@ class VariantProcessor:
             'maincds_end_genomic': transcript_obj.mainorf_end_genomic,
             'codon_change': codon_change,
             'overlaps_maincds': overlaps_maincds,
-            'transcript_extended': is_extended,  # This should reflect extended status
-            'start_codon_type': start_codon_type,  # Add start codon type information
-            'start_codon': start_codon,  # Add actual start codon sequence
-            'vcf_info': vcf_info,  # Add VCF INFO field
+            'transcript_extended': is_extended,
+            'start_codon_type': start_codon_type,
+            'start_codon': start_codon,
+            'vcf_info': vcf_info,
             'is_variant_in_maincds': is_variant_in_maincds
         }
 

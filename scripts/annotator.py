@@ -72,6 +72,142 @@ class VariantAnnotator:
             UORFConsequence.INFRAME_INSERTION: self._handle_inframe_indel,
         }
 
+    def determine_indel_boundaries(self, vcf_pos, ref_allele, alt_allele, strand):
+        """
+        Determine the start and end boundaries of an indel in genomic coordinates.
+        
+        Args:
+            vcf_pos: Genomic position from VCF
+            ref_allele: Reference allele
+            alt_allele: Alternative allele
+            strand: DNA strand ('+' or '-')
+            
+        Returns:
+            Tuple of (indel_start, indel_end) genomic positions
+        """
+        # Determine indel type
+        is_deletion = len(ref_allele) > len(alt_allele)
+        is_insertion = len(ref_allele) < len(alt_allele)
+        
+        if is_deletion:
+            # For deletions: start is VCF position, end is position + length of ref allele - 1
+            indel_start = vcf_pos
+            indel_end = vcf_pos + len(ref_allele) - 1
+        elif is_insertion:
+            # For insertions: both start and end are at the VCF position
+            # (as insertion occurs between positions)
+            indel_start = vcf_pos
+            indel_end = vcf_pos
+        else:
+            # For SNVs - simple case
+            indel_start = vcf_pos
+            indel_end = vcf_pos
+        
+        # Return genomic coordinates (same for both strands)
+        return indel_start, indel_end
+
+    def check_uorf_boundary_intersection(self, indel_start, indel_end, uorf_start, uorf_end, strand):
+        """
+        Check how an indel intersects with uORF boundaries.
+        
+        Args:
+            indel_start: Start position of the indel (genomic)
+            indel_end: End position of the indel (genomic)
+            uorf_start: Start position of the uORF (genomic)
+            uorf_end: End position of the uORF (genomic)
+            strand: DNA strand ('+' or '-')
+            
+        Returns:
+            Dictionary with intersection classifications
+        """
+        # Check if indel intersects the uORF start boundary
+        intersects_start = (indel_start < uorf_start and indel_end >= uorf_start)
+        
+        # Check if indel intersects the uORF end boundary
+        intersects_end = (indel_start <= uorf_end and indel_end > uorf_end)
+        
+        # Check if indel is completely inside the uORF
+        fully_inside = (indel_start >= uorf_start and indel_end <= uorf_end)
+        
+        # Check if indel completely encompasses the uORF
+        fully_encompasses = (indel_start < uorf_start and indel_end > uorf_end)
+        
+        # For debugging purposes
+        if self.debug_mode:
+            logging.debug(f"Indel boundaries: {indel_start}-{indel_end}, uORF boundaries: {uorf_start}-{uorf_end}")
+            logging.debug(f"Intersection analysis: start={intersects_start}, end={intersects_end}, inside={fully_inside}, encompasses={fully_encompasses}")
+        
+        return {
+            'intersects_start': intersects_start,
+            'intersects_end': intersects_end,
+            'fully_inside': fully_inside,
+            'fully_encompasses': fully_encompasses
+        }
+
+    def determine_indel_consequence(self, intersection_info, ref_allele, alt_allele, strand):
+        """
+        Determine the biological consequence of an indel based on its intersection with uORF boundaries.
+        
+        Args:
+            intersection_info: Dictionary with intersection classifications
+            ref_allele: Reference allele
+            alt_allele: Alternative allele
+            strand: DNA strand ('+' or '-')
+            
+        Returns:
+            UORFConsequence enum value or None
+        """
+        # Determine indel type
+        is_deletion = len(ref_allele) > len(alt_allele)
+        is_insertion = len(ref_allele) < len(alt_allele)
+        is_snv = len(ref_allele) == len(alt_allele) == 1
+        
+        # Default consequence is None (no significant effect)
+        consequence = None
+        
+        # Handle boundary intersections
+        if intersection_info['intersects_start']:
+            if is_deletion:
+                # Deletion crossing the start boundary - start loss
+                consequence = UORFConsequence.START_LOST
+                if self.debug_mode:
+                    logging.debug("Deletion crosses uORF start boundary - classified as START_LOST")
+            elif is_insertion:
+                # Insertion at start boundary - check if it causes frameshift
+                if abs(len(alt_allele) - len(ref_allele)) % 3 != 0:
+                    consequence = UORFConsequence.FRAMESHIFT
+                    if self.debug_mode:
+                        logging.debug("Insertion at uORF start boundary causes frameshift")
+                else:
+                    consequence = UORFConsequence.INFRAME_INSERTION
+                    if self.debug_mode:
+                        logging.debug("In-frame insertion at uORF start boundary")
+        
+        elif intersection_info['intersects_end']:
+            if is_deletion:
+                # Deletion crossing the end boundary - stop loss
+                consequence = UORFConsequence.STOP_LOST
+                if self.debug_mode:
+                    logging.debug("Deletion crosses uORF end boundary - classified as STOP_LOST")
+            elif is_insertion:
+                # Insertion at end boundary - check if it causes frameshift
+                if abs(len(alt_allele) - len(ref_allele)) % 3 != 0:
+                    consequence = UORFConsequence.FRAMESHIFT
+                    if self.debug_mode:
+                        logging.debug("Insertion at uORF end boundary causes frameshift")
+                else:
+                    consequence = UORFConsequence.INFRAME_INSERTION
+                    if self.debug_mode:
+                        logging.debug("In-frame insertion at uORF end boundary")
+        
+        elif intersection_info['fully_encompasses']:
+            # Indel completely encompasses the uORF - complex case
+            consequence = UORFConsequence.START_LOST  # Consider as loss of the entire uORF
+            if self.debug_mode:
+                logging.debug("Indel completely encompasses uORF - classified as START_LOST")
+        
+        return consequence
+
     def does_overlap_maincds(self, uorf_end, maincds_start) -> bool:
         """Check if uORF overlaps with mainCDS in transcript coordinates."""
         if uorf_end is None or maincds_start is None:
@@ -79,13 +215,81 @@ class VariantAnnotator:
         return uorf_end >= maincds_start
 
     def predict_impact(self, variant_data: Dict, uorf_consequence: UORFConsequence) -> Optional[MainCDSImpact]:
-        """Predict the impact of a variant on the main CDS."""
+        """
+        Predict the impact of a variant on the main CDS.
+        Enhanced to handle boundary-crossing indels.
+        """
         try:
             required_fields = ['uorf_start', 'uorf_end', 'maincds_start', 'maincds_end', 'position']
             for field in required_fields:
                 if field not in variant_data or variant_data[field] is None:
                     logging.warning(f"Missing required field for impact prediction: {field}")
                     return None
+
+            # Check for boundary-crossing indels
+            if ('position_genomic' in variant_data and 
+                'uorf_start_genomic' in variant_data and 
+                'uorf_end_genomic' in variant_data):
+                
+                pos_genomic = variant_data['position_genomic']
+                ref_allele = variant_data.get('ref_allele', '')
+                alt_allele = variant_data.get('alt_allele', '')
+                strand = variant_data.get('strand', '')
+                
+                if len(ref_allele) > 1 or len(alt_allele) > 1:
+                    # Determine indel boundaries
+                    indel_start, indel_end = self.determine_indel_boundaries(
+                        pos_genomic, ref_allele, alt_allele, strand
+                    )
+                    
+                    # Check boundary intersection
+                    intersection_info = self.check_uorf_boundary_intersection(
+                        indel_start, indel_end,
+                        variant_data['uorf_start_genomic'],
+                        variant_data['uorf_end_genomic'],
+                        strand
+                    )
+                    
+                    # Special handling for different types of boundary intersections
+                    if intersection_info['intersects_start'] and uorf_consequence == UORFConsequence.START_LOST:
+                        # For start loss due to boundary crossing, check overlap with mainCDS
+                        if self.does_overlap_maincds(
+                            variant_data['uorf_end'], variant_data['maincds_start']
+                        ):
+                            return MainCDSImpact.OVERLAP_ELIMINATION
+                        return MainCDSImpact.MAIN_CDS_UNAFFECTED
+                    
+                    elif intersection_info['intersects_end'] and uorf_consequence == UORFConsequence.STOP_LOST:
+                        # For stop loss due to boundary crossing, find new stop codon
+                        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(
+                            variant_data, UORFConsequence.STOP_LOST
+                        )
+                        
+                        overlaps_maincds = self.does_overlap_maincds(
+                            variant_data['uorf_end'], variant_data['maincds_start']
+                        )
+                        
+                        if overlaps_maincds:
+                            if new_stop_pos is None:
+                                return MainCDSImpact.OVERLAP_EXTENSION
+                            
+                            if new_stop_pos > variant_data['uorf_end']:
+                                return MainCDSImpact.OVERLAP_EXTENSION
+                            elif new_stop_pos < variant_data['maincds_start']:
+                                return MainCDSImpact.OVERLAP_ELIMINATION
+                            else:
+                                return MainCDSImpact.OVERLAP_TRUNCATION
+                        
+                        if new_stop_pos is None:
+                            return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+                            
+                        if new_stop_pos >= variant_data['maincds_start']:
+                            if variant_data['uorf_end'] == variant_data['maincds_start'] - 1:
+                                return MainCDSImpact.N_TERMINAL_EXTENSION
+                            else:
+                                return MainCDSImpact.OUT_OF_FRAME_OVERLAP
+                        else:
+                            return MainCDSImpact.UORF_PRODUCT_EXTENSION
 
             if uorf_consequence in self.impact_handlers:
                 return self.impact_handlers[uorf_consequence](variant_data)
@@ -161,7 +365,10 @@ class VariantAnnotator:
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _handle_stop_lost(self, variant_data: Dict) -> MainCDSImpact:
-        """Handle stop-loss variants."""
+        """
+        Handle stop-loss variants.
+        Enhanced to handle boundary-crossing indels affecting stop codons.
+        """
         overlaps_maincds = self.does_overlap_maincds(
             variant_data['uorf_end'], variant_data['maincds_start']
         )
@@ -173,7 +380,34 @@ class VariantAnnotator:
             logging.debug(f"mainCDS coordinates: {variant_data['maincds_start']}-{variant_data['maincds_end']} (transcript)")
             logging.debug(f"Original overlaps_maincds: {overlaps_maincds}")
         
-        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(variant_data, UORFConsequence.STOP_LOST)
+        # Check if this is a boundary-crossing indel
+        is_boundary_crossing = False
+        if ('position_genomic' in variant_data and 
+            'uorf_start_genomic' in variant_data and 
+            'uorf_end_genomic' in variant_data):
+            
+            pos_genomic = variant_data['position_genomic']
+            ref_allele = variant_data.get('ref_allele', '')
+            alt_allele = variant_data.get('alt_allele', '')
+            strand = variant_data.get('strand', '')
+            
+            if len(ref_allele) > 1 or len(alt_allele) > 1:
+                # Determine indel boundaries
+                indel_start, indel_end = self.determine_indel_boundaries(
+                    pos_genomic, ref_allele, alt_allele, strand
+                )
+                
+                # Check if indel crosses the end boundary
+                is_boundary_crossing = (indel_start <= variant_data['uorf_end_genomic'] and 
+                                    indel_end > variant_data['uorf_end_genomic'])
+                
+                if self.debug_mode and is_boundary_crossing:
+                    logging.debug(f"Boundary-crossing indel detected: {indel_start}-{indel_end}")
+                    logging.debug(f"uORF end boundary: {variant_data['uorf_end_genomic']}")
+        
+        new_stop_pos, stop_codon_info = self._find_new_stop_codon_position_enhanced(
+            variant_data, UORFConsequence.STOP_LOST
+        )
 
         if self.debug_mode:
             if new_stop_pos is not None:
@@ -188,9 +422,39 @@ class VariantAnnotator:
             else:
                 logging.debug(f"No new stop codon found")
         
+        # For boundary-crossing indels, check if we need special handling
+        if is_boundary_crossing:
+            if self.debug_mode:
+                logging.debug(f"Processing boundary-crossing indel affecting stop codon")
+            
+            if overlaps_maincds:
+                # For overlapping uORFs with boundary-crossing indels
+                if new_stop_pos is None:
+                    self._write_bed_entry(len(self.transcript_seq.sequence), variant_data,
+                                    MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.STOP_LOST)
+                    return MainCDSImpact.OVERLAP_EXTENSION
+                
+                var_in_maincds = (variant_data['position'] >= variant_data['maincds_start'])
+                
+                if new_stop_pos > variant_data['uorf_end']:
+                    if not var_in_maincds:
+                        self._write_bed_entry(new_stop_pos, variant_data, 
+                                        MainCDSImpact.OVERLAP_EXTENSION, UORFConsequence.STOP_LOST)
+                    return MainCDSImpact.OVERLAP_EXTENSION
+                elif new_stop_pos < variant_data['maincds_start']:
+                    if not var_in_maincds:
+                        self._write_bed_entry(new_stop_pos, variant_data, 
+                                        MainCDSImpact.OVERLAP_ELIMINATION, UORFConsequence.STOP_LOST)
+                    return MainCDSImpact.OVERLAP_ELIMINATION
+                else:
+                    if not var_in_maincds:
+                        self._write_bed_entry(new_stop_pos, variant_data, 
+                                        MainCDSImpact.OVERLAP_TRUNCATION, UORFConsequence.STOP_LOST)
+                    return MainCDSImpact.OVERLAP_TRUNCATION
+        
+        # Standard handling for non-boundary-crossing variants
         if overlaps_maincds:
-            #var_in_maincds = False
-            var_in_maincds = (variant_data['position'] >= variant_data['mmaincds_start'])
+            var_in_maincds = (variant_data['position'] >= variant_data['maincds_start'])
             if new_stop_pos is None:
                 if not var_in_maincds:
                     self._write_bed_entry(len(self.transcript_seq.sequence), variant_data,
@@ -233,7 +497,10 @@ class VariantAnnotator:
             return MainCDSImpact.UORF_PRODUCT_EXTENSION
 
     def _handle_frameshift(self, variant_data: Dict) -> MainCDSImpact:
-        """Handle frameshift variants."""
+        """
+        Handle frameshift variants.
+        Enhanced to handle boundary-crossing indels causing frameshifts.
+        """
         overlaps_maincds = self.does_overlap_maincds(
             variant_data['uorf_end'], variant_data['maincds_start']
         )
@@ -241,6 +508,50 @@ class VariantAnnotator:
         position = variant_data['position']
         ref_allele = variant_data.get('ref_allele', '')
         alt_allele = variant_data.get('alt_allele', '')
+        
+        # Check if this is a boundary-crossing indel
+        is_boundary_crossing = False
+        if ('position_genomic' in variant_data and 
+            'uorf_start_genomic' in variant_data and 
+            'uorf_end_genomic' in variant_data):
+            
+            pos_genomic = variant_data['position_genomic']
+            strand = variant_data.get('strand', '')
+            
+            # Determine indel boundaries
+            indel_start, indel_end = self.determine_indel_boundaries(
+                pos_genomic, ref_allele, alt_allele, strand
+            )
+            
+            # Check intersection with uORF boundaries
+            intersection_info = self.check_uorf_boundary_intersection(
+                indel_start, indel_end,
+                variant_data['uorf_start_genomic'],
+                variant_data['uorf_end_genomic'],
+                strand
+            )
+            
+            # Check if indel crosses any boundary
+            is_boundary_crossing = (intersection_info['intersects_start'] or 
+                                intersection_info['intersects_end'] or
+                                intersection_info['fully_encompasses'])
+            
+            if self.debug_mode and is_boundary_crossing:
+                logging.debug(f"Boundary-crossing frameshift indel detected")
+                logging.debug(f"Indel: {ref_allele}>{alt_allele} at {pos_genomic}")
+                logging.debug(f"Intersection info: {intersection_info}")
+                
+                # Check if indel crosses the start boundary which might lead to start loss
+                if intersection_info['intersects_start']:
+                    logging.debug(f"Indel crosses start boundary - might cause START_LOST")
+                    # If indel removes start codon, no need to find new stop codon
+                    if self._check_start_codon_loss(variant_data, indel_start, indel_end):
+                        if overlaps_maincds:
+                            logging.debug(f"Start codon loss in overlapping uORF - OVERLAP_ELIMINATION")
+                            return MainCDSImpact.OVERLAP_ELIMINATION
+                        else:
+                            logging.debug(f"Start codon loss in non-overlapping uORF - MAIN_CDS_UNAFFECTED")
+                            return MainCDSImpact.MAIN_CDS_UNAFFECTED
         
         if position == 10 and ref_allele == 'A' and alt_allele == 'AT':
             return MainCDSImpact.UORF_PRODUCT_TRUNCATION
@@ -288,6 +599,46 @@ class VariantAnnotator:
             self._write_bed_entry(new_stop_pos, variant_data, MainCDSImpact.OUT_OF_FRAME_OVERLAP, UORFConsequence.FRAMESHIFT)
             return MainCDSImpact.OUT_OF_FRAME_OVERLAP
 
+    def _check_start_codon_loss(self, variant_data: Dict, indel_start: int, indel_end: int) -> bool:
+        """
+        Check if an indel crossing the uORF start boundary causes loss of the start codon.
+        
+        Args:
+            variant_data: Dictionary with variant information
+            indel_start: Start position of the indel (genomic)
+            indel_end: End position of the indel (genomic)
+            
+        Returns:
+            True if start codon is lost, False otherwise
+        """
+        try:
+            uorf_start_genomic = variant_data.get('uorf_start_genomic')
+            strand = variant_data.get('strand', '')
+            
+            if not uorf_start_genomic:
+                return False
+                
+            # For positive strand, start codon begins at uORF start
+            if strand == '+':
+                # Check if indel affects the first 3 bases of uORF (start codon)
+                start_codon_end = uorf_start_genomic + 2  # 3 bases for start codon
+                return indel_start <= start_codon_end and indel_end >= uorf_start_genomic
+                
+            # For negative strand, start codon is at the end (negative strand reading direction)
+            else:
+                # Start codon for negative strand is at the "end" in genomic coordinates
+                # but at the "beginning" in transcript coordinates
+                uorf_end_genomic = variant_data.get('uorf_end_genomic')
+                if not uorf_end_genomic:
+                    return False
+                    
+                start_codon_start = uorf_end_genomic - 2  # 3 bases for start codon
+                return indel_start <= uorf_end_genomic and indel_end >= start_codon_start
+                
+        except Exception as e:
+            logging.error(f"Error checking start codon loss: {str(e)}")
+            return False
+
     def _handle_stop_gained(self, variant_data: Dict) -> MainCDSImpact:
         """Handle stop-gain variants."""
         overlaps_maincds = self.does_overlap_maincds(
@@ -317,10 +668,10 @@ class VariantAnnotator:
         return MainCDSImpact.MAIN_CDS_UNAFFECTED
 
     def _find_new_stop_codon_position_enhanced(self, variant_data: Dict, 
-                                             uorf_consequence: UORFConsequence) -> Tuple[Optional[int], Optional[Dict]]:
+                                            uorf_consequence: UORFConsequence) -> Tuple[Optional[int], Optional[Dict]]:
         """
         Find the position of the next in-frame stop codon after a mutation.
-        Enhanced with more detailed logging to help debug codon discrepancies.
+        Enhanced to handle boundary-crossing indels.
         
         Args:
             variant_data: Dictionary with variant information
@@ -335,19 +686,79 @@ class VariantAnnotator:
             uorf_end = variant_data['uorf_end']
             maincds_end = variant_data.get('maincds_end')
             strand = variant_data.get('strand', self.transcript_seq.transcript.strand)
+            pos_genomic = variant_data.get('position_genomic')
+            uorf_start_genomic = variant_data.get('uorf_start_genomic')
+            uorf_end_genomic = variant_data.get('uorf_end_genomic')
             
             if self.debug_mode:
                 logging.debug(f"Finding new stop codon for {uorf_consequence.name}")
-                logging.debug(f"Variant position: {transcript_pos}, strand: {strand}")
-                logging.debug(f"uORF coordinates: {uorf_start}-{uorf_end} (transcript)")
+                logging.debug(f"Variant position: {transcript_pos} (genomic: {pos_genomic}), strand: {strand}")
+                logging.debug(f"uORF coordinates: {uorf_start}-{uorf_end} (transcript), {uorf_start_genomic}-{uorf_end_genomic} (genomic)")
                 if maincds_end:
                     logging.debug(f"mainCDS end: {maincds_end} (transcript)")
+            
+            # Check if the variant is outside uORF boundaries but might intersect them
+            if (pos_genomic and uorf_start_genomic and uorf_end_genomic and 
+                (transcript_pos < uorf_start or transcript_pos > uorf_end)):
+                
+                ref_allele = variant_data.get('ref_allele', '')
+                alt_allele = variant_data.get('alt_allele', '')
+                
+                if len(ref_allele) > 1 or len(alt_allele) > 1:
+                    # Determine indel boundaries in genomic coordinates
+                    indel_start, indel_end = self.determine_indel_boundaries(
+                        pos_genomic, ref_allele, alt_allele, strand
+                    )
+                    
+                    # Check intersection with uORF boundaries
+                    intersection_info = self.check_uorf_boundary_intersection(
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                    )
+                    
+                    if self.debug_mode:
+                        logging.debug(f"Checking boundary intersection for variant outside uORF")
+                        logging.debug(f"Indel: {ref_allele}>{alt_allele}, boundaries: {indel_start}-{indel_end}")
+                        logging.debug(f"Intersection result: {intersection_info}")
+                    
+                    # Special handling for different types of boundary intersections
+                    if intersection_info['intersects_start']:
+                        if self.debug_mode:
+                            logging.debug("Indel intersects uORF start - potential START_LOST")
+                        # If it's a start loss, we don't need to find a new stop codon
+                        if uorf_consequence == UORFConsequence.START_LOST:
+                            return None, None
+                        
+                        # For other cases affecting the start, scan from the beginning of uORF
+                        scan_start_pos = uorf_start - 1
+                        
+                    elif intersection_info['intersects_end']:
+                        if self.debug_mode:
+                            logging.debug("Indel intersects uORF end - potential STOP_LOST")
+                        # For stop loss, scan from the beginning of uORF
+                        scan_start_pos = uorf_start - 1
+                        
+                    elif intersection_info['fully_encompasses']:
+                        if self.debug_mode:
+                            logging.debug("Indel fully encompasses uORF - treating as complete loss")
+                        # If indel encompasses entire uORF, treat as complete loss
+                        return None, None
+                        
+                    else:
+                        # No significant boundary intersection
+                        if self.debug_mode:
+                            logging.debug("No significant boundary intersection found")
+                        if uorf_consequence not in [UORFConsequence.STOP_LOST, UORFConsequence.FRAMESHIFT]:
+                            return None, None
+                else:
+                    # Small variants outside uORF without boundary intersection
+                    if uorf_consequence not in [UORFConsequence.STOP_LOST, UORFConsequence.FRAMESHIFT]:
+                        return None, None
             
             # Determine where to start scanning for a new stop codon
             if uorf_consequence == UORFConsequence.STOP_LOST or uorf_consequence == UORFConsequence.FRAMESHIFT:
                 scan_start_pos = uorf_start - 1
                 if self.debug_mode:
-                    logging.debug(f"Scanning from variant position: {scan_start_pos}")
+                    logging.debug(f"Scanning from uORF start position: {scan_start_pos}")
             else:
                 if self.debug_mode:
                     logging.debug(f"Consequence {uorf_consequence.name} doesn't require stop codon scanning")
@@ -370,27 +781,22 @@ class VariantAnnotator:
 
             if not ref_allele or not alt_allele:
                 if self.debug_mode:
-                    logging.debug("Missing allele information for frameshift variant")
+                    logging.debug("Missing allele information for variant")
                 return None, None
 
-            # REAL : Making necessary sequence changes
+            # Making necessary sequence changes
             relative_pos = transcript_pos - uorf_start
             if self.debug_mode:
                 logging.debug("Amending transcript sequence to incorporate alternative allele")
             if strand == "+":
                 if self.debug_mode:
-                    logging.debug(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.debug(f"Reference allele: {ref_allele}, alternative allele: {alt_allele}")
                     logging.debug(f"Sequence up until site: {sequence[:relative_pos]}")
                     logging.debug(f"Sequence after site: {sequence[relative_pos + len(ref_allele):]}")
                 sequence = sequence[:relative_pos] + alt_allele + sequence[relative_pos + len(ref_allele):]
             else:
-                #complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A',
-                #              'N': 'N', 'n': 'n'}
-                #alt_alelle_complement = ''.join(complement.get(base.upper(), base)
-                #               for base in reversed(alt_allele))
-
                 if self.debug_mode:
-                    logging.debug(f"Reference alelle: {ref_allele}, alternative allele: {alt_allele}")
+                    logging.debug(f"Reference allele: {ref_allele}, alternative allele: {alt_allele}")
                     logging.debug(f"Sequence up until site: {sequence[:relative_pos - len(ref_allele) + 1]}")
                     logging.debug(f"Sequence after site: {sequence[relative_pos + 1:]}")
 
@@ -427,7 +833,7 @@ class VariantAnnotator:
         except Exception as e:
             logging.error(f"Error finding new stop codon: {str(e)}")
             return None, None
-            
+       
     def _get_sequence_from_position(self, start_pos: int) -> str:
         """Get the sequence from the given position to the end of the transcript."""
         try:
@@ -511,7 +917,7 @@ class VariantAnnotator:
     def get_codon_change(self, variant_data: Dict) -> str:
         """
         Get codon change string for the variant, assuming sequence is already correctly oriented.
-        This method now logs all intermediate steps to help debug discrepancies between logs and results.
+        Enhanced to handle boundary-crossing indels.
         """
         try:
             required_fields = ['position', 'ref_allele', 'alt_allele']
@@ -526,9 +932,89 @@ class VariantAnnotator:
             if self.debug_mode:
                 logging.debug(f"get_codon_change input: pos={pos}, ref={ref}, alt={alt}")
 
+            # Check for boundary-crossing indels
+            is_boundary_crossing = False
+            if ('position_genomic' in variant_data and 
+                'uorf_start_genomic' in variant_data and 
+                'uorf_end_genomic' in variant_data):
+                
+                pos_genomic = variant_data['position_genomic']
+                strand = variant_data.get('strand', '')
+                
+                # Determine indel boundaries
+                indel_start, indel_end = self.determine_indel_boundaries(
+                    pos_genomic, ref, alt, strand
+                )
+                
+                # Check intersection with uORF boundaries
+                intersection_info = self.check_uorf_boundary_intersection(
+                    indel_start, indel_end,
+                    variant_data['uorf_start_genomic'],
+                    variant_data['uorf_end_genomic'],
+                    strand
+                )
+                
+                is_boundary_crossing = (intersection_info['intersects_start'] or 
+                                    intersection_info['intersects_end'])
+                
+                if self.debug_mode and is_boundary_crossing:
+                    logging.debug(f"Boundary-crossing indel detected for codon change")
+                    logging.debug(f"Intersection info: {intersection_info}")
+            
             if len(ref) != len(alt):
                 if self._is_frameshift(ref, alt):
                     return "FRAMESHIFT"
+                    
+                # For boundary-crossing inframe indels, provide special handling
+                if is_boundary_crossing:
+                    if self.debug_mode:
+                        logging.debug(f"Boundary-crossing inframe indel, special codon change handling")
+                    
+                    # For indels crossing the start boundary
+                    if (pos < self.transcript_seq.transcript.uorf_start and 
+                        abs(pos - self.transcript_seq.transcript.uorf_start) <= len(ref)):
+                        if self.debug_mode:
+                            logging.debug(f"Indel crosses start boundary, checking start codon change")
+                        
+                        # Get the original start codon
+                        if len(self.transcript_seq.uorf_region) >= 3:
+                            original_start_codon = self.transcript_seq.uorf_region[:3].upper()
+                            
+                            # Determine what the new sequence would be after the indel
+                            # This is a simplification - a full implementation would need to 
+                            # reconstruct the exact sequence change
+                            if len(ref) > len(alt):  # Deletion
+                                # For deletions crossing the start, start codon might be partially or fully deleted
+                                return f"{original_start_codon}>DELETED"
+                            else:  # Insertion
+                                # For insertions, we might need to adjust the reading frame
+                                frame_shift = (len(alt) - len(ref)) % 3
+                                if frame_shift == 0:
+                                    return f"{original_start_codon}>SHIFTED"
+                                else:
+                                    return "FRAMESHIFT"
+                    
+                    # For indels crossing the end boundary
+                    if (pos > self.transcript_seq.transcript.uorf_end and 
+                        abs(pos - self.transcript_seq.transcript.uorf_end) <= len(ref)):
+                        if self.debug_mode:
+                            logging.debug(f"Indel crosses end boundary, checking stop codon change")
+                        
+                        # Get the original stop codon
+                        if len(self.transcript_seq.uorf_region) >= 3:
+                            original_stop_codon = self.transcript_seq.uorf_region[-3:].upper()
+                            
+                            # Determine what the new sequence would be after the indel
+                            if len(ref) > len(alt):  # Deletion
+                                # For deletions crossing the stop, stop codon might be partially or fully deleted
+                                return f"{original_stop_codon}>DELETED"
+                            else:  # Insertion
+                                # For insertions, we might need to adjust the reading frame
+                                frame_shift = (len(alt) - len(ref)) % 3
+                                if frame_shift == 0:
+                                    return f"{original_stop_codon}>SHIFTED"
+                                else:
+                                    return "FRAMESHIFT"
 
             # Get the codon containing this position
             ref_codon = self.transcript_seq.get_codon_at_position(pos)
@@ -600,34 +1086,89 @@ class VariantAnnotator:
             return "NA"
 
     def get_consequence(self, variant_data: Dict) -> Optional[UORFConsequence]:
-        """Determine the consequence of a variant on the uORF."""
+        """
+        Determine the consequence of a variant on the uORF.
+        Enhanced to handle indels that cross uORF boundaries.
+        """
         try:
-            required_fields = ['position', 'ref_allele', 'alt_allele']
+            required_fields = ['position', 'ref_allele', 'alt_allele', 'position_genomic']
             for field in required_fields:
                 if field not in variant_data or variant_data[field] is None:
                     return None
 
             pos = int(variant_data['position'])
+            pos_genomic = int(variant_data['position_genomic'])
             ref = variant_data['ref_allele']
             alt = variant_data['alt_allele']
             
             uorf_start = self.transcript_seq.transcript.uorf_start
             uorf_end = self.transcript_seq.transcript.uorf_end
+            uorf_start_genomic = variant_data.get('uorf_start_genomic')
+            uorf_end_genomic = variant_data.get('uorf_end_genomic')
+            strand = variant_data.get('strand', self.transcript_seq.transcript.strand)
             
+            # Check for frameshift indels
+            if self._is_frameshift(ref, alt):
+                # For indels that cause frameshift, check if they intersect uORF boundaries
+                if uorf_start_genomic and uorf_end_genomic:
+                    # Determine indel boundaries in genomic coordinates
+                    indel_start, indel_end = self.determine_indel_boundaries(
+                        pos_genomic, ref, alt, strand
+                    )
+                    
+                    # Check intersection with uORF boundaries
+                    intersection_info = self.check_uorf_boundary_intersection(
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                    )
+                    
+                    # If indel intersects boundaries, determine specific consequence
+                    boundary_consequence = self.determine_indel_consequence(
+                        intersection_info, ref, alt, strand
+                    )
+                    
+                    if boundary_consequence:
+                        if self.debug_mode:
+                            logging.debug(f"Boundary intersection detected: {boundary_consequence.name}")
+                        return boundary_consequence
+                
+                # If no boundary intersection or couldn't determine boundary consequence
+                # Default to frameshift for frameshifting indels
+                return UORFConsequence.FRAMESHIFT
+            
+            # For non-frameshift indels and SNVs, check if they're near uORF boundaries
             near_start = abs(pos - uorf_start) <= 3
             near_end = abs(pos - uorf_end) <= 3
             
-            # Check for frameshift first
-            if self._is_frameshift(ref, alt):
-                return UORFConsequence.FRAMESHIFT
-            
             # Check if variant is outside uORF and not near boundaries
             if (pos < uorf_start or pos > uorf_end) and not near_start and not near_end:
+                # For variants completely outside uORF, check if they're part of larger indels
+                # that might intersect with uORF boundaries
+                if uorf_start_genomic and uorf_end_genomic and (len(ref) > 1 or len(alt) > 1):
+                    # Determine indel boundaries in genomic coordinates
+                    indel_start, indel_end = self.determine_indel_boundaries(
+                        pos_genomic, ref, alt, strand
+                    )
+                    
+                    # Check intersection with uORF boundaries
+                    intersection_info = self.check_uorf_boundary_intersection(
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                    )
+                    
+                    # If indel intersects boundaries, determine specific consequence
+                    boundary_consequence = self.determine_indel_consequence(
+                        intersection_info, ref, alt, strand
+                    )
+                    
+                    if boundary_consequence:
+                        if self.debug_mode:
+                            logging.debug(f"Large indel outside uORF but intersects boundary: {boundary_consequence.name}")
+                        return boundary_consequence
+                        
+                # If no boundary intersection, variant has no effect on uORF
                 return None
 
             # For inframe indels that aren't frameshifts
             if len(ref) != len(alt):
-                # We already know it's not a frameshift, so it must be an inframe indel
                 # First determine if it's an insertion or deletion
                 if len(ref) < len(alt):
                     inframe_consequence = UORFConsequence.INFRAME_INSERTION
