@@ -121,7 +121,7 @@ class Pipeline:
         
         # Sort results by chromosome and position (removed uORF_ID from sorting)
         if not results_df.empty:
-            results_df = results_df.sort_values(['Chromosome', 'Original_Genome_Position'])
+            results_df = results_df.sort_values(['Chromosome', 'Variant_Genomic_Position'])
         
         return results_df
 

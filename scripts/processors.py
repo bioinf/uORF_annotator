@@ -402,11 +402,11 @@ class VariantProcessor:
         
         result = {
             'Chromosome': chrom,
-            'Original_Genome_Position': vcf_pos,
+            'Variant_Genomic_Position': vcf_pos,
             'RSID': rsid,
-            'BED_Name': bed_full_name,
+            'uORF_Name': bed_full_name,
             'Transcript_Position': variant_coords.transcript,
-            'Ref_Allele': ref_allele,  # Save original alleles for output
+            'Ref_Allele': ref_allele,
             'Alt_Allele': alt_allele,
             'Strand': transcript_obj.strand,
             'Transcript_ID': display_transcript_id,
@@ -422,10 +422,10 @@ class VariantProcessor:
             'uORF_Consequence': uorf_consequence.value,
             'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
             'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
-            'Start_Codon_Type': start_codon_type,  # Add start codon type to the result
-            'Start_Codon': start_codon,  # Add actual start codon sequence to the result
+            'Start_Codon_Type': start_codon_type,
+            'Start_Codon': start_codon,
             'Variant_In_MainCDS': 'Yes' if is_variant_in_maincds else 'No',
-            'VCF_INFO': vcf_info  # Add VCF INFO field to the result
+            'VCF_INFO': vcf_info
         }
         
         # Add additional information if transcript was extended
@@ -439,7 +439,7 @@ class VariantProcessor:
         # The key fields that make a result unique
         key_fields = [
             result['Chromosome'],
-            str(result['Original_Genome_Position']),
+            str(result['Variant_Genomic_Position']),
             result['Ref_Allele'],
             result['Alt_Allele'],
             result['Transcript_ID'],
