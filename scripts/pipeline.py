@@ -122,14 +122,22 @@ class Pipeline:
         
         return results_df
 
+    # In the _intersect_files method:
     def _intersect_files(self) -> pd.DataFrame:
         """Intersect VCF and BED files using bedtools."""
+        # Add the -wb option to include all columns from the VCF file including INFO field
         vcf = BedTool(self.vcf_file)
         bed = BedTool(self.bed_file)
-        intersection = vcf.intersect(bed, wa=True, wb=True)
+        # Change intersection to include all VCF fields
+        intersection = vcf.intersect(bed, wb=True)
         
         df = pd.read_csv(intersection.fn, sep='\t', header=None)
         df.columns = [f'col{i}' for i in range(len(df.columns))]
+        
+        if self.debug_mode:
+            logging.debug(f"Intersection result: first few rows:\n{df.head()}")
+            logging.debug(f"Columns: {df.columns}")
+        
         return df
 
     def save_results(self, results_df: pd.DataFrame) -> None:
@@ -193,7 +201,7 @@ def main():
         
         logging.info("Processing variants...")
         results = pipeline.process_variants()
-        
+
         # Save results to both TSV and BED files
         pipeline.save_results(results)
         

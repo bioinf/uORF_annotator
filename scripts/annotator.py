@@ -626,7 +626,6 @@ class VariantAnnotator:
                 logging.debug('BED file path is not set, skipping')
             pass
         else:
-            # new_stop_pos += 1
             chrom = variant_data['chromosome']
             uorf_start = variant_data['uorf_start']
             uorf_start_genomic = variant_data['uorf_start_genomic']
@@ -634,13 +633,14 @@ class VariantAnnotator:
             full_uorf_name = variant_data['full_uorf_name']
             rsid = variant_data['rsid']
 
+            vcf_info = variant_data.get('vcf_info', '.')
+            vcf_info = vcf_info.replace('\t', ' ').replace('\n', ' ')
             genomic_pos = variant_data['position_genomic']
             ref_allele = variant_data['ref_allele']
             alt_allele = variant_data['alt_allele']
             conseq_name = uorf_consequence.name
-            # TODO: add coordinates of a variant here
             full_var_id = f'{chrom}-{genomic_pos}-{ref_allele}-{alt_allele}'
-            feature_name = f'{full_var_id}|{conseq_name}|{rsid}|{main_cds_eff.name}|{full_uorf_name}'
+            feature_name = f'{full_var_id}|{conseq_name}|{rsid}|{main_cds_eff.name}|{full_uorf_name}|INFO:{vcf_info}'
 
             transcript_exons = self.transcript_obj.exons.copy()
             if self.transcript_obj.strand == '-':
@@ -660,8 +660,6 @@ class VariantAnnotator:
                 if self.debug_mode:
                     logging.debug(f"Processing exon with coordinates {current_exon_start}-{current_exon_end}, searching for stop codon at {new_stop_pos}. uORF start is at {uorf_start}")
 
-                # Correction for uORFs starting before transcript start
-                # TODO: ideally, this step has to be performed at transcript extension
                 if exon_number == 0:
 
                     if (self.transcript_obj.strand == "+") and (uorf_start_genomic < current_exon.genome_start):

@@ -40,6 +40,21 @@ class VariantProcessor:
                 
             ref_allele = row['col3']
             alt_allele = row['col4']
+
+            try:
+                vcf_info = str(row.get('col7', '.'))
+                if vcf_info == 'nan' or vcf_info == 'None':
+                    vcf_info = '.'
+            except:
+                vcf_info = '.'
+                
+            if self.debug_mode:
+                logging.debug(f"Extracted VCF INFO: {vcf_info}")
+
+            # Extract INFO field from VCF
+            vcf_info = row.get('col7', '.')
+            if vcf_info == 'nan' or vcf_info == 'None':
+                vcf_info = '.'
             
             # Check if we have combined BED entries from the pipeline
             if 'all_bed_entries' in row:
@@ -112,7 +127,8 @@ class VariantProcessor:
                         rsid=rsid,
                         bed_full_name=bed_full_name,
                         processed_positions=processed_positions,
-                        is_extended=False
+                        is_extended=False,
+                        vcf_info=vcf_info
                     )
                     if result:
                         # Add result and update processed_positions
@@ -144,7 +160,8 @@ class VariantProcessor:
                             rsid=rsid,
                             bed_full_name=bed_full_name,
                             processed_positions=processed_positions,
-                            is_extended=True
+                            is_extended=True,
+                            vcf_info=vcf_info
                         )
                         if result:
                             # Check for duplicates before adding
@@ -165,7 +182,7 @@ class VariantProcessor:
             return []
 
     def _process_single_transcript(self, transcript_id, chrom, vcf_pos, ref_allele, alt_allele, 
-                                  rsid, bed_full_name, processed_positions, is_extended):
+                                rsid, bed_full_name, processed_positions, is_extended, vcf_info='.'):
         """
         Process a single transcript to determine variant effect.
         This consolidated method handles both regular and extended transcripts.
@@ -180,6 +197,7 @@ class VariantProcessor:
             bed_full_name: Full name from BED file
             processed_positions: Set of already processed transcript positions
             is_extended: Whether this is an extended transcript
+            vcf_info: VCF INFO field (new parameter)
             
         Returns:
             Result dictionary or None if processing fails
@@ -209,7 +227,7 @@ class VariantProcessor:
             # For positive strand, check if position is within uORF boundaries
             if transcript_obj.strand == '+':
                 is_within_uorf = (vcf_pos >= transcript_obj.uorf_start_genomic and 
-                              vcf_pos <= transcript_obj.uorf_end_genomic)
+                            vcf_pos <= transcript_obj.uorf_end_genomic)
             # For negative strand, need to handle possible swapped coordinates
             else:
                 uorf_min = min(transcript_obj.uorf_start_genomic, transcript_obj.uorf_end_genomic)
@@ -219,8 +237,8 @@ class VariantProcessor:
             if not is_within_uorf:
                 if self.debug_mode:
                     logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
-                               f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
-                               f"for {'extended' if is_extended else ''} transcript {transcript_id}, skipping")
+                            f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
+                            f"for {'extended' if is_extended else ''} transcript {transcript_id}, skipping")
                 return None  # Skip to next transcript
         
         # Get transcript position for the variant
@@ -323,7 +341,8 @@ class VariantProcessor:
             'overlaps_maincds': overlaps_maincds,
             'transcript_extended': is_extended,  # This should reflect extended status
             'start_codon_type': start_codon_type,  # Add start codon type information
-            'start_codon': start_codon  # Add actual start codon sequence
+            'start_codon': start_codon,  # Add actual start codon sequence
+            'vcf_info': vcf_info  # Add VCF INFO field
         }
 
         # Get consequences and impacts
@@ -378,7 +397,8 @@ class VariantProcessor:
             'uORF_mainCDS_Overlap': 'overlapping' if overlaps_maincds else 'non_overlapping',
             'mainCDS_Impact': maincds_impact.value if maincds_impact else 'None',
             'Start_Codon_Type': start_codon_type,  # Add start codon type to the result
-            'Start_Codon': start_codon  # Add actual start codon sequence to the result
+            'Start_Codon': start_codon,  # Add actual start codon sequence to the result
+            'VCF_INFO': vcf_info  # Add VCF INFO field to the result
         }
         
         # Add additional information if transcript was extended
@@ -386,7 +406,7 @@ class VariantProcessor:
             result['Transcript_Extended'] = 'Yes'
         
         return result
-    
+
     def _create_result_identifier(self, result: Dict) -> str:
         """Create a unique identifier for a result to detect duplicates."""
         # The key fields that make a result unique
