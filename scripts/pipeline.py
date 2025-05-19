@@ -14,19 +14,19 @@ class Pipeline:
     """Main pipeline for variant analysis and annotation."""
     
     def __init__(self, bed_file: str, vcf_file: str, gtf_file: str, fasta_file: str, 
-                 output_prefix: str, frame_filter: str = "ALL", debug_mode: bool = False):
+                 output_prefix: str, uorf_type: str = "ALL", debug_mode: bool = False):
         """Initialize pipeline with input files."""
         self.bed_file = bed_file
         self.vcf_file = vcf_file
         self.fasta_file = fasta_file
         self.output_prefix = output_prefix
         self.debug_mode = debug_mode
-        self.frame_filter = frame_filter.upper()  # Store the frame filter option
+        self.uorf_type = uorf_type.upper()  # Store the uORF type option
         
-        # Validate frame filter value
-        if self.frame_filter not in ["ALL", "ATG", "NON-ATG"]:
-            logging.warning(f"Invalid frame filter '{self.frame_filter}', defaulting to 'ALL'")
-            self.frame_filter = "ALL"
+        # Validate uORF type value
+        if self.uorf_type not in ["ALL", "ATG", "NON-ATG"]:
+            logging.warning(f"Invalid uORF type '{self.uorf_type}', defaulting to 'ALL'")
+            self.uorf_type = "ALL"
         
         # Generate output filenames - ensure we don't double-add extensions
         self.tsv_output = f"{output_prefix}.tsv"
@@ -36,7 +36,7 @@ class Pipeline:
         self.fasta = pysam.FastaFile(fasta_file)
         
         # Use a copy of the bed file for analysis to avoid file handle issues
-        self.converter = CoordinateConverter(bed_file, gtf_file, frame_filter=self.frame_filter, debug_mode=debug_mode)
+        self.converter = CoordinateConverter(bed_file, gtf_file, uorf_type=self.uorf_type, debug_mode=debug_mode)
         
         # Initialize the processor with the output BED file path
         # but don't create the file until we're ready to write to it
@@ -69,7 +69,7 @@ class Pipeline:
             position_groups[variant_key].append(idx)
         
         logging.info(f"Found {len(position_groups)} unique variants after grouping")
-        logging.info(f"Using frame filter: {self.frame_filter}")
+        logging.info(f"Using uORF type filter: {self.uorf_type}")
 
         # Process each unique variant position
         for variant_key, row_indices in position_groups.items():
@@ -167,8 +167,8 @@ def main():
     output_group.add_argument('--output', help='Path to output file (legacy mode)')
     output_group.add_argument('--output-prefix', help='Prefix for output files (.tsv and .bed will be appended)')
     
-    # Add frame filter argument
-    parser.add_argument('--frame-filter', default='ALL', choices=['ALL', 'ATG', 'NON-ATG'], 
+    # Add uORF type filter argument
+    parser.add_argument('--uorf-type', default='ALL', choices=['ALL', 'ATG', 'NON-ATG'], 
                        help='Filter uORFs by start codon type (ALL, ATG, or NON-ATG). Default: ALL')
     
     # Add debug mode argument
@@ -197,7 +197,7 @@ def main():
             
         logging.info("Initializing pipeline...")
         pipeline = Pipeline(args.bed, args.vcf, args.gtf, args.fasta, output_prefix, 
-                           frame_filter=args.frame_filter, debug_mode=args.debug)
+                           uorf_type=args.uorf_type, debug_mode=args.debug)
         
         logging.info("Processing variants...")
         results = pipeline.process_variants()

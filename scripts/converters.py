@@ -1,7 +1,3 @@
-"""
-Coordinate conversion utilities for genomic and transcript coordinates.
-"""
-
 import logging
 import gzip
 from typing import Dict, Tuple
@@ -14,14 +10,14 @@ from parsers import GTFParser
 class CoordinateConverter:
     """Handles conversion between genomic and transcript coordinates."""
     
-    def __init__(self, bed_file: str, gtf_file: str, frame_filter: str = "ALL", debug_mode: bool = False):
+    def __init__(self, bed_file: str, gtf_file: str, uorf_type: str = "ALL", debug_mode: bool = False):
         """Initialize the converter with input files."""
         self.bed_file = bed_file
         self.gtf_file = gtf_file
         self.transcripts: Dict[str, Transcript] = {}
         self.raw_bed_entries = {}  # Store the raw bed entries for overlap determination
         self.debug_mode = debug_mode
-        self.frame_filter = frame_filter  # Store the frame filter option
+        self.uorf_type = uorf_type  # Store the uORF type option
         
         # Setup logging - use INFO level by default, DEBUG only when debug_mode is True
         log_level = logging.DEBUG if debug_mode else logging.INFO
@@ -31,7 +27,7 @@ class CoordinateConverter:
             force=True
         )
         
-        logging.info(f"Initializing coordinate converter with frame filter: {frame_filter}")
+        logging.info(f"Initializing coordinate converter with uORF type filter: {uorf_type}")
         
         # Parse files
         self._parse_files()
@@ -90,7 +86,7 @@ class CoordinateConverter:
             cds_by_transcript[transcript_id]['ends'].append(parsed['end'])
 
     def _parse_bed(self, gtf_data: Dict) -> None:
-        """Parse BED file and create transcript objects, applying frame filter if specified."""
+        """Parse BED file and create transcript objects, applying uORF type filter if specified."""
         bed_df = pd.read_csv(self.bed_file, sep='\t', header=None)
         
         logging.info(f"BED file contains {len(bed_df)} entries")
@@ -128,12 +124,12 @@ class CoordinateConverter:
                 elif frame_indicator in ["NON-ATG", "NONATG", "NON_ATG"]:
                     is_non_atg = True
             
-            # Apply frame filter if specified
-            if self.frame_filter != "ALL":
-                if self.frame_filter == "ATG" and not has_atg_start:
+            # Apply uORF type filter if specified
+            if self.uorf_type != "ALL":
+                if self.uorf_type == "ATG" and not has_atg_start:
                     skipped_frames += 1
                     continue
-                elif self.frame_filter == "NON-ATG" and not is_non_atg:
+                elif self.uorf_type == "NON-ATG" and not is_non_atg:
                     skipped_frames += 1
                     continue
             
@@ -176,9 +172,9 @@ class CoordinateConverter:
             else:
                 logging.warning(f"No exons found for transcript {transcript_id}")
 
-        # Log summary of frame filtering
-        if self.frame_filter != "ALL":
-            logging.info(f"Frame filter '{self.frame_filter}' applied: processed {processed_frames} entries, skipped {skipped_frames} entries")
+        # Log summary of uORF type filtering
+        if self.uorf_type != "ALL":
+            logging.info(f"uORF type filter '{self.uorf_type}' applied: processed {processed_frames} entries, skipped {skipped_frames} entries")
             
         # Log summary of transcripts with multiple uORFs
         for transcript_id, uorf_ids in processed_transcripts.items():
