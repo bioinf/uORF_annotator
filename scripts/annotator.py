@@ -8,6 +8,7 @@ class UORFConsequence(Enum):
     STOP_LOST = "uorf_stop_lost"
     STOP_GAINED = "uorf_stop_gained"
     FRAMESHIFT = "uorf_frameshift"
+    DELETION_AND_STOP_LOST = "uorf_deletion_and_stop_lost"
     MISSENSE = "uorf_missense"
     SYNONYMOUS = "uorf_synonymous"
     SPLICE_REGION = "uorf_splice_region"
@@ -66,6 +67,7 @@ class VariantAnnotator:
             UORFConsequence.START_LOST: self._handle_start_lost,
             UORFConsequence.STOP_LOST: self._handle_stop_lost,
             UORFConsequence.FRAMESHIFT: self._handle_frameshift,
+            UORFConsequence.DELETION_AND_STOP_LOST: self._handle_frameshift,
             UORFConsequence.STOP_GAINED: self._handle_stop_gained,
             UORFConsequence.SPLICE_REGION: self._handle_splice_region,
             UORFConsequence.INFRAME_DELETION: self._handle_inframe_indel,
@@ -121,10 +123,17 @@ class VariantAnnotator:
             Dictionary with intersection classifications
         """
         # Check if indel intersects the uORF start boundary
-        intersects_start = (indel_start < uorf_start and indel_end >= uorf_start)
+        # Conditions below ensure inclusion of the start codon into the account when determining the overlap
+        if strand == '+':
+            intersects_start = (indel_start < uorf_start + 3 and indel_end >= uorf_start)
+        else:
+            intersects_start = (indel_start < uorf_start and indel_end >= uorf_start)
         
         # Check if indel intersects the uORF end boundary
-        intersects_end = (indel_start <= uorf_end and indel_end > uorf_end)
+        if strand == '+':
+            intersects_end = (indel_start <= uorf_end and indel_end > uorf_end)
+        else:
+            intersects_end = (indel_start <= uorf_end and indel_end > uorf_end - 3)
         
         # Check if indel is completely inside the uORF
         fully_inside = (indel_start >= uorf_start and indel_end <= uorf_end)
@@ -157,48 +166,30 @@ class VariantAnnotator:
         Returns:
             UORFConsequence enum value or None
         """
-        # Determine indel type
-        is_deletion = len(ref_allele) > len(alt_allele)
-        is_insertion = len(ref_allele) < len(alt_allele)
-        is_snv = len(ref_allele) == len(alt_allele) == 1
         
         # Default consequence is None (no significant effect)
         consequence = None
         
         # Handle boundary intersections
         if intersection_info['intersects_start']:
-            if is_deletion:
-                # Deletion crossing the start boundary - start loss
+            # if is_deletion:
+            # Deletion crossing the start boundary - start loss
+            if strand == "+":
                 consequence = UORFConsequence.START_LOST
-                if self.debug_mode:
-                    logging.debug("Deletion crosses uORF start boundary - classified as START_LOST")
-            elif is_insertion:
-                # Insertion at start boundary - check if it causes frameshift
-                if abs(len(alt_allele) - len(ref_allele)) % 3 != 0:
-                    consequence = UORFConsequence.FRAMESHIFT
-                    if self.debug_mode:
-                        logging.debug("Insertion at uORF start boundary causes frameshift")
-                else:
-                    consequence = UORFConsequence.INFRAME_INSERTION
-                    if self.debug_mode:
-                        logging.debug("In-frame insertion at uORF start boundary")
+            else:
+                consequence = UORFConsequence.DELETION_AND_STOP_LOST
+            if self.debug_mode:
+                logging.debug("Deletion crosses uORF start boundary - classified as START_LOST")
         
         elif intersection_info['intersects_end']:
-            if is_deletion:
-                # Deletion crossing the end boundary - stop loss
-                consequence = UORFConsequence.STOP_LOST
-                if self.debug_mode:
-                    logging.debug("Deletion crosses uORF end boundary - classified as STOP_LOST")
-            elif is_insertion:
-                # Insertion at end boundary - check if it causes frameshift
-                if abs(len(alt_allele) - len(ref_allele)) % 3 != 0:
-                    consequence = UORFConsequence.FRAMESHIFT
-                    if self.debug_mode:
-                        logging.debug("Insertion at uORF end boundary causes frameshift")
-                else:
-                    consequence = UORFConsequence.INFRAME_INSERTION
-                    if self.debug_mode:
-                        logging.debug("In-frame insertion at uORF end boundary")
+            # if is_deletion:
+            # Deletion crossing the end boundary - stop loss
+            if strand == "+":
+                consequence = UORFConsequence.DELETION_AND_STOP_LOST
+            else:
+                consequence = UORFConsequence.START_LOST
+            if self.debug_mode:
+                logging.debug("Deletion crosses uORF end boundary - classified as STOP_LOST")
         
         elif intersection_info['fully_encompasses']:
             # Indel completely encompasses the uORF - complex case
@@ -1107,30 +1098,32 @@ class VariantAnnotator:
             uorf_end_genomic = variant_data.get('uorf_end_genomic')
             strand = variant_data.get('strand', self.transcript_seq.transcript.strand)
             
-            # Check for frameshift indels
-            if self._is_frameshift(ref, alt):
+            # Processing deletions
+            if len(ref) > len(alt):
                 # For indels that cause frameshift, check if they intersect uORF boundaries
                 if uorf_start_genomic and uorf_end_genomic:
                     # Determine indel boundaries in genomic coordinates
                     indel_start, indel_end = self.determine_indel_boundaries(
                         pos_genomic, ref, alt, strand
                     )
-                    
+
                     # Check intersection with uORF boundaries
                     intersection_info = self.check_uorf_boundary_intersection(
                         indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
                     )
-                    
+
                     # If indel intersects boundaries, determine specific consequence
                     boundary_consequence = self.determine_indel_consequence(
                         intersection_info, ref, alt, strand
                     )
-                    
+
                     if boundary_consequence:
                         if self.debug_mode:
                             logging.debug(f"Boundary intersection detected: {boundary_consequence.name}")
                         return boundary_consequence
-                
+
+            # Check for frameshift indels
+            if self._is_frameshift(ref, alt):
                 # If no boundary intersection or couldn't determine boundary consequence
                 # Default to frameshift for frameshifting indels
                 return UORFConsequence.FRAMESHIFT

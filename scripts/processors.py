@@ -261,7 +261,7 @@ class VariantProcessor:
                     logging.debug(f"Position {vcf_pos} is outside uORF genomic coordinates "
                             f"({transcript_obj.uorf_start_genomic}-{transcript_obj.uorf_end_genomic}) "
                             f"for {'extended' if is_extended else ''} transcript {transcript_id}, skipping")
-                return None  # Skip to next transcript
+            #    return None  # Skip to next transcript
 
             if not is_within_uorf and (len(ref_allele) > 1 or len(alt_allele) > 1):
                 # For large indels, check if they cross uORF boundaries
