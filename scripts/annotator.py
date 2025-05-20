@@ -67,6 +67,7 @@ class VariantAnnotator:
             UORFConsequence.START_LOST: self._handle_start_lost,
             UORFConsequence.STOP_LOST: self._handle_stop_lost,
             UORFConsequence.FRAMESHIFT: self._handle_frameshift,
+            # TODO: uORF consequence is incorrectly reflected in BED due to usage of a frameshift handler here - consider revision
             UORFConsequence.DELETION_AND_STOP_LOST: self._handle_frameshift,
             UORFConsequence.STOP_GAINED: self._handle_stop_gained,
             UORFConsequence.SPLICE_REGION: self._handle_splice_region,
