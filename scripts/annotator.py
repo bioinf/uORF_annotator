@@ -91,7 +91,8 @@ class VariantAnnotator:
         # Determine indel type
         is_deletion = len(ref_allele) > len(alt_allele)
         is_insertion = len(ref_allele) < len(alt_allele)
-        
+
+        # TODO : Insertion cases have to be deleted here
         if is_deletion:
             # For deletions: start is VCF position, end is position + length of ref allele - 1
             indel_start = vcf_pos
