@@ -1,21 +1,19 @@
-# uORF Variant Analysis Pipeline
+# uORF Variant Annotator v. 2.0
 
-A bioinformatics pipeline for analyzing the impact of genetic variants on upstream Open Reading Frames (uORFs) and predicting their consequences on the main Coding Sequence (CDS).
+Thiis is new version of the bioinformatics pipeline for analyzing the impact of genetic variants on upstream Open Reading Frames (uORFs).
 
 ## Overview
 
-This pipeline identifies and annotates variants that affect uORFs, which are small open reading frames located in the 5' untranslated regions (5' UTRs) of mRNAs. Variants in uORFs can impact translation regulation of the main protein-coding sequence, potentially leading to biological effects. The pipeline predicts consequences of variants on both the uORF itself and the downstream main CDS.
+This tool identifies and annotates variants that affect uORFs, which are small open reading frames located in the 5' untranslated regions (5' UTRs) of mRNAs. Variants in uORFs can impact translation regulation of the main protein-coding sequence, potentially leading to biological effects. The pipeline predicts consequences of variants on both the uORF itself and the downstream main CDS.
 
-## Features
+## What is new in v. 2.0
 
-- Parses GTF and BED files to extract transcript and uORF information
-- Analyzes variants in VCF format and intersects them with uORF regions
-- Categorizes uORF variants into different consequence types (e.g., start loss, stop loss, frameshift)
-- Predicts impact on main CDS (e.g., N-terminal extension, overlap truncation)
-- Handles complex cases like boundary-crossing indels and splice variants
-- Support for both canonical (ATG) and non-canonical start codons
-- Generates comprehensive TSV output with annotation details
-- Creates BED files for visualization in genome browsers
+- The code was fully re-written to enhance its readability and further editing;
+- Stability, handling of errors, and logging have been substantially improved;
+- Added correct handling of deletions spanning start/end of the reading frame, as well as splice sites;
+- Correct processing of transcripts with uORF starts upstream of annotated TSS was enabled;
+- M>ore types of main CDS impact are now annotated, especially for overlapping ORFs;
+- More relevant information about each variant is now available in the TSV output.
 
 ## Installation
 
@@ -50,16 +48,16 @@ python uorf_annotator.py --bed path/to/uorfs.bed --vcf path/to/variants.vcf \
 
 ### Command-line Options
 
-| Option | Description |
-|--------|-------------|
-| `--bed` | Path to BED file with uORF coordinates |
-| `--vcf` | Path to VCF file with variants |
-| `--gtf` | Path to GTF annotation file |
-| `--fasta` | Path to reference genome FASTA file |
-| `--output-prefix` | Prefix for output files (.tsv and .bed will be appended) |
-| `--uorf-type` | Filter uORFs by start codon type (`ALL`, `ATG`, or `NON-ATG`). Default: `ALL` |
-| `--exclude-maincds-variants` | Exclude variants that are located within the main CDS region |
-| `--debug` | Enable detailed debugging logs |
+| Option | Description                                                                                                              |
+|--------|--------------------------------------------------------------------------------------------------------------------------|
+| `--bed` | Path to BED file with uORF coordinates (for default, use `data/sorted.v4.bed`)                                           |
+| `--vcf` | Path to VCF file with variants                                                                                           |
+| `--gtf` | Path to GTF annotation file (for default, use `data/combined_uorf.v4.gtf`)<br/>**Important! Decompress file before use** |
+| `--fasta` | Path to reference genome FASTA file (CRCh38 is expected with default files)                                              |
+| `--output-prefix` | Prefix for output files (.tsv and .bed will be appended)                                                                 |
+| `--uorf-type` | Filter uORFs by start codon type (`ALL`, `ATG`, or `NON-ATG`). Default: `ALL`                                            |
+| `--exclude-maincds-variants` | Exclude variants that are located within the main CDS region                                                             |
+| `--debug` | Enable detailed debugging logs                                                                                           |
 
 ### Input File Requirements
 
