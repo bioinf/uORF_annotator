@@ -53,9 +53,13 @@ class Pipeline:
             # Just create an empty file - will be appended to during processing
             pass
             
-        intersected = self._intersect_files()
-        if intersected.empty:
-            logging.error("No intersections found between VCF and BED!")
+        try:
+            intersected = self._intersect_files()
+            if intersected.empty:
+                logging.warning("No intersections found between VCF and BED!")
+                return pd.DataFrame()
+        except Exception as e:
+            logging.error(f"Error during file intersection: {str(e)}")
             return pd.DataFrame()
 
         results = []
@@ -125,23 +129,45 @@ class Pipeline:
         
         return results_df
 
-    # In the _intersect_files method:
     def _intersect_files(self) -> pd.DataFrame:
         """Intersect VCF and BED files using bedtools."""
-        # Add the -wb option to include all columns from the VCF file including INFO field
-        vcf = BedTool(self.vcf_file)
-        bed = BedTool(self.bed_file)
-        # Change intersection to include all VCF fields
-        intersection = vcf.intersect(bed, wb=True)
-        
-        df = pd.read_csv(intersection.fn, sep='\t', header=None)
-        df.columns = [f'col{i}' for i in range(len(df.columns))]
-        
-        if self.debug_mode:
-            logging.debug(f"Intersection result: first few rows:\n{df.head()}")
-            logging.debug(f"Columns: {df.columns}")
-        
-        return df
+        try:
+            # Add the -wb option to include all columns from the VCF file including INFO field
+            vcf = BedTool(self.vcf_file)
+            bed = BedTool(self.bed_file)
+            
+            # Change intersection to include all VCF fields
+            intersection = vcf.intersect(bed, wb=True)
+            
+            # Check if the intersection produced any results
+            try:
+                # Try to read the first line to see if there are any results
+                with open(intersection.fn, 'r') as f:
+                    first_line = f.readline().strip()
+                if not first_line:
+                    logging.warning("Intersection result is empty")
+                    return pd.DataFrame()  # Return empty DataFrame
+            except:
+                logging.warning("Failed to read intersection results, returning empty DataFrame")
+                return pd.DataFrame()  # Return empty DataFrame if can't read
+            
+            # Try to read the intersection results into a DataFrame
+            try:
+                df = pd.read_csv(intersection.fn, sep='\t', header=None)
+                df.columns = [f'col{i}' for i in range(len(df.columns))]
+                
+                if self.debug_mode:
+                    logging.debug(f"Intersection result: first few rows:\n{df.head()}")
+                    logging.debug(f"Columns: {df.columns}")
+                
+                return df
+            except pd.errors.EmptyDataError:
+                logging.warning("Intersection result is empty (pandas EmptyDataError)")
+                return pd.DataFrame()  # Return empty DataFrame
+            
+        except Exception as e:
+            logging.error(f"Error during intersection: {str(e)}")
+            return pd.DataFrame()  # Return empty DataFrame on any error
 
     def save_results(self, results_df: pd.DataFrame) -> None:
         """Save results to output files."""
@@ -153,6 +179,11 @@ class Pipeline:
             logging.info(f"Total variant-uORF pairs processed: {len(results_df)}")
         else:
             logging.warning("No variants were processed successfully.")
+            # Create empty output files so the pipeline completes cleanly
+            with open(self.tsv_output, 'w') as f:
+                f.write("No variants were processed successfully\n")
+            # BED file was already created at the beginning of process_variants()
+            logging.info(f"Empty result files created at {self.tsv_output} and {self.bed_output}")
 
 
 def main():
