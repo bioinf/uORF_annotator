@@ -1,73 +1,179 @@
-# uORF Annotator v. 1.0
-*uORF Annotator* is the tool for annotation of the functional impact of genetic variants in upstream open reading frames (uORFs) in the human genome, which were manually annotated based on publicly available Ribo-seq and other data types in 3641 OMIM genes.
+# uORF Variant Analysis Pipeline
 
-## Conda environment
-Install all dependencies from `requirements.yml` as new conda environment.
+A bioinformatics pipeline for analyzing the impact of genetic variants on upstream Open Reading Frames (uORFs) and predicting their consequences on the main Coding Sequence (CDS).
+
+## Overview
+
+This pipeline identifies and annotates variants that affect uORFs, which are small open reading frames located in the 5' untranslated regions (5' UTRs) of mRNAs. Variants in uORFs can impact translation regulation of the main protein-coding sequence, potentially leading to biological effects. The pipeline predicts consequences of variants on both the uORF itself and the downstream main CDS.
+
+## Features
+
+- Parses GTF and BED files to extract transcript and uORF information
+- Analyzes variants in VCF format and intersects them with uORF regions
+- Categorizes uORF variants into different consequence types (e.g., start loss, stop loss, frameshift)
+- Predicts impact on main CDS (e.g., N-terminal extension, overlap truncation)
+- Handles complex cases like boundary-crossing indels and splice variants
+- Support for both canonical (ATG) and non-canonical start codons
+- Generates comprehensive TSV output with annotation details
+- Creates BED files for visualization in genome browsers
+
+## Installation
+
+### Prerequisites
+
+- Python 3.7+
+- Conda or Miniconda
+
+### Setup Environment
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/uorf-variant-analysis.git
+cd uorf-variant-analysis
 ```
-conda env create -f requirements.yml
+
+2. Create and activate conda environment:
+```bash
+conda env create -f environment.yml
+conda activate uorf-variant-analysis
 ```
-## Required input data
-* VCF file of variants for further annotation
-* BED file with available uORFs (`sorted.v4.bed` in this repository)
-* GTF file with genomic features annotation
-* \[optional\] TSV file with gene-level gnomAD constraint statistics
 
-It is highly recommended to run the tool **with a GTF file containing uORF-matching transcript isoforms for each gene** (`combined_uorf.v4.gtf` in this repository). If a GTF file lacks matching transcript IDs, main CDS effect will not be properly annotated.
-## Run example
+## Usage
+
+### Basic Usage
+
+```bash
+python pipeline.py --bed path/to/uorfs.bed --vcf path/to/variants.vcf \
+                  --gtf path/to/annotation.gtf --fasta path/to/genome.fa \
+                  --output-prefix results/output
 ```
-python uORF_annotator.py \
-    -i <input_variants.vcf> \
-    -b <input_uORFs.bed> \
-    -g <input_annotation.gtf> \
-    -f <human_genome.fasta> \
-    -gc <gnomad_constraint> \
-    -out <output file prefix>
-    -utr
+
+### Command-line Options
+
+| Option | Description |
+|--------|-------------|
+| `--bed` | Path to BED file with uORF coordinates |
+| `--vcf` | Path to VCF file with variants |
+| `--gtf` | Path to GTF annotation file |
+| `--fasta` | Path to reference genome FASTA file |
+| `--output-prefix` | Prefix for output files (.tsv and .bed will be appended) |
+| `--uorf-type` | Filter uORFs by start codon type (`ALL`, `ATG`, or `NON-ATG`). Default: `ALL` |
+| `--exclude-maincds-variants` | Exclude variants that are located within the main CDS region |
+| `--debug` | Enable detailed debugging logs |
+
+### Input File Requirements
+
+#### BED File Format
+The BED file should contain uORF coordinates with the following columns:
+1. Chromosome
+2. Start position (0-based)
+3. End position (exclusive)
+4. Name field (format: transcript_id|additional_info|start_codon_type)
+5. Score (not used)
+6. Strand
+
+Example:
 ```
-## Output formats specification
-### tab-separated (tsv) file
+chr1    12345   12400   ENST00000123456|uORF1|ATG    0    +
+```
 
-Two TSV outputs are generated - one for ATG-started uORFs and one - for non-ATG-started ones. Each row represents annotation of a single variant in particular uORF (per uORF annotation). Fields in the file have the following content:
+#### VCF File
+Standard VCF format with variants to be analyzed.
 
-1) #CHROM - contig name  
-2) POS - position  
-3) REF - reference allele
-4) ALT - alternative allele
-5) orf_start - uORF start position
-6) orf_end - uORF end position
-7) strand - strand dirrection defined as + (forward) or - (reverse).
-8) gene_name - symnol gene ID from GTF annotation
-9) transcript - transcript ID from uORF file
-10) codon_type - ATG or non-ATG start codon in uORF 
-11) overlapping_type - type of uORF (overlapping/non-overlapping) from input `.bed` file  
-12) dist_from_orf_to_snp - distance from start of uORF to variant position  
-13) consequence - type of effect 
-14) main_cds_effect - effect of uORF variant on the main CDS (annotated for `frameshift` and `stop lost` variants only)
-15) in_known_ORF - a binary flag indicating if a variant affects main ORF of the gene
-16) pLI score (if gnomAD constraint annotation is provided)
-17) LOEUF score (if gnomAD constraint annotation is provided)
-18) INFO - old INFO field from inputed `.vcf` file  
+#### GTF File
+Standard GTF format with gene annotations. The file must include CDS and exon features.
 
-### Varinat call format (VCF)
+### Output Files
 
-The generated VCF output contains all variants affecting uORF sequences. Each variant is annotated with the following INFO fields: `uORFs`, `uORFs_ATG`, `uORFs_eff`. The description of fields is given below:
+1. **TSV output** (output_prefix.tsv): Contains detailed annotation of each variant including:
+   - Variant information (chromosome, position, rsID, alleles)
+   - uORF information (coordinates, transcript ID)
+   - Consequence on uORF (e.g., frameshift, start_lost)
+   - Impact on main CDS (e.g., n_terminal_extension)
+   - Codon changes
 
-* `uORFs` - a full consequence annotation for each variant-uORF combination. Format: 'ORF_START|ORF_END|ORF_SYMB|ORF_CONSEQ|main_cds_effect|in_known_CDS|in_known_ORF|utid|overlapping_type|dominance_type|codon_type'
-* `uORFs_ATG` - a flag indicating if a variant falls within at least one ATG-starting uORF.
-* `uORFs_eff` - a short notation of how a change in uORF structure resulting from a variant affects the main coding part (СDS) of a gene. ext - N-terminal extension, overl - out-of-frame overlap, activ - overlap removal with possible main ORF activation, unaff - no effect on main CDS. If the variant falls into more than one uORF, the effects on them are listed through &
+2. **BED output** (output_prefix.bed): Contains visualizable genomic regions affected by variants, which can be loaded into genome browsers.
 
-### BED format
+## Core Components
 
-*uORF Annotator* generates two BED files with uORFs affected by variants that alter the uORF length (one file contains ATG uORFs and the other contains non-ATG-started uORFs). Both BED files contain two entries for each affected uORF: 
-1) initial uORF, its `name` field format: uORF_unique_number-gene_name|uORF_type|start_codon_type(ATG/non-AT), filled with black color; 
-2) resulting uORF after introduction of a variant,  its `name` field format: uORF_unique_number-gene_name|variant|variant_type|main_CDS_effect,  filled with different colors depending on the effect. Color legend: 
-* Grey features - cases when the variant does not change the overlap between uORF and main CDS.
-* Orange features - cases when (a) uORF-truncating variant eliminates the existing overlap between uORF and main CDS; or (b) variant leads to the production of a chimeric protein product of the gene, possessing an extension at the N-terminus resulting from uORF translation
-* Red features - cases where variant leads to the appearance of a new overlapping segment between uORF and main gene CDS, with the two sequences translated in different frames.
+### Module Overview
 
+- **pipeline.py**: Main entry point for the pipeline
+- **parsers.py**: Parsers for GTF and other genomic file formats
+- **converters.py**: Handles conversion between genomic and transcript coordinates
+- **processors.py**: Processes variants to determine their effects
+- **annotator.py**: Annotates variants with biological consequences
+- **models.py**: Data structures for genomic and transcript features
+- **transcript_sequence.py**: Handles transcript sequences and uORF extraction
 
-## Supplementary data files
+### Key Classes
 
-This repository contains two additional files:
-1) `Annotated_uORFs_and_alt.CDS.starts_v4.8.bed` - Manually annotated alternative open reading frames (including non-overlapping and overlapping uORFs, CDS_extensions and CDS_truncations) found in 3641 human genes from the OMIM database . BED-file, field "name" contains information about 'gene_name|isoform|type_of_ORF|start_codon'.
-2) `High-confidence_uORFs_v2.bed` - List of high confidence uORFs found in 3641 human genes from the OMIM database. In this list, we included only uORFs predicted in at least two out of four different studies (the present study, Ji et al. (PMID: 26687005), McGillivray et al. (PMID: 29562350), Scholz et al. (PMID: 31513641)). BED-file, field "name" contains information about 'gene_name|isoform|type_of_uORF|type_of_start_codon(ATG/non-ATG)'.
+- **Pipeline**: Main controller that orchestrates the analysis workflow
+- **CoordinateConverter**: Converts between genomic and transcript coordinates
+- **VariantProcessor**: Processes variants and determines their effects
+- **VariantAnnotator**: Annotates variants with biological consequences
+- **Transcript**: Represents transcript data with coordinate mappings
+- **TranscriptSequence**: Handles sequence extraction and manipulation
+
+## Variant Classification
+
+### uORF Consequences
+
+The pipeline classifies variants into the following consequence types:
+
+- **START_LOST**: Loss of uORF start codon
+- **STOP_LOST**: Loss of uORF stop codon
+- **STOP_GAINED**: Creation of a premature stop codon
+- **FRAMESHIFT**: Indel causing a shift in reading frame
+- **DELETION_AND_STOP_LOST**: Complex cases where both deletion and stop loss occur
+- **MISSENSE**: Nonsynonymous variants changing amino acid
+- **SYNONYMOUS**: Synonymous variants preserving amino acid
+- **SPLICE_SITE**: Variants affecting splice sites
+- **INFRAME_DELETION**: Deletions that maintain the reading frame
+- **INFRAME_INSERTION**: Insertions that maintain the reading frame
+
+### Main CDS Impact
+
+Predicts how the uORF variant affects the main CDS:
+
+- **N_TERMINAL_EXTENSION**: Extension of protein N-terminus
+- **OUT_OF_FRAME_OVERLAP**: Out-of-frame overlap with main CDS
+- **UORF_PRODUCT_TRUNCATION**: Truncation of uORF product
+- **UORF_PRODUCT_EXTENSION**: Extension of uORF product
+- **STOP_GAINED**: Introduction of premature stop codon
+- **OVERLAP_EXTENSION**: Extension of uORF-CDS overlap
+- **OVERLAP_TRUNCATION**: Truncation of uORF-CDS overlap
+- **OVERLAP_ELIMINATION**: Elimination of uORF-CDS overlap
+- **MAIN_CDS_UNAFFECTED**: No effect on main CDS
+
+## Examples
+
+### Example 1: Analyze variants with default settings
+
+```bash
+python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+                  --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
+                  --output-prefix results/all_variants
+```
+
+### Example 2: Analyze only variants in ATG-start uORFs
+
+```bash
+python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+                  --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
+                  --output-prefix results/atg_uorf_variants --uorf-type ATG
+```
+
+### Example 3: Exclude variants that fall within main CDS
+
+```bash
+python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+                  --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
+                  --output-prefix results/non_cds_variants --exclude-maincds-variants
+```
+
+## Cite
+
+If you use this pipeline in your research, please cite:
+
+[PMID: 36651276](https://pubmed.ncbi.nlm.nih.gov/36651276/)
