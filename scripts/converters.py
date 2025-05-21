@@ -3,8 +3,8 @@ import gzip
 from typing import Dict, Tuple
 import pandas as pd
 
-from models import Exon, Transcript
-from parsers import GTFParser
+from scripts.models import Exon, Transcript
+from scripts.parsers import GTFParser
 
 
 class CoordinateConverter:

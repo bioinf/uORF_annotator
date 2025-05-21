@@ -1,7 +1,9 @@
 import logging
 from typing import Dict, Optional, Tuple
 from enum import Enum
-from models import Transcript
+
+from scripts.models import Transcript
+
 
 class UORFConsequence(Enum):
     START_LOST = "uorf_start_lost"

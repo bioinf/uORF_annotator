@@ -5,9 +5,9 @@ import pysam
 import hashlib
 import json
 
-from converters import CoordinateConverter
-from annotator import VariantAnnotator, UORFConsequence, MainCDSImpact
-from transcript_sequence import TranscriptSequence
+from scripts.converters import CoordinateConverter
+from scripts.annotator import VariantAnnotator, UORFConsequence, MainCDSImpact
+from scripts.transcript_sequence import TranscriptSequence
 
 class VariantProcessor:
     def __init__(self, converter: CoordinateConverter, fasta: pysam.FastaFile, 
