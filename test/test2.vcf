@@ -1,0 +1,29 @@
+##fileformat=VCFv4.2
+##INFO=<ID=TYPE,Number=1,Type=String,Description="Variant type with respect to ORF">
+###INFO=<ID=MAIN_ORF_EFF,Number=1,Type=String,Description="Effect of variant on main ORF (if any)">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	7	rs1	C	T	.	PASS	TYPE=non_coding_variant;MAIN_ORF_EFF=NA
+chr1	30	rs20	T	G	.	PASS	TYPE=start_lost|stop_lost;MAIN_CDS_EFF=NA|out-of-frame_overlap
+chr1	34	rs2	A	G	.	PASS	TYPE=synonymous_variant;MAIN_ORF_EFF=NA
+chr1	34	rs3	A	T	.	PASS	TYPE=missense_variant;MAIN_ORF_EFF=NA
+chr1	34	rs25	ACCC	A	.	PASS	TYPE=inframe_deletion;MAIN_ORF_EFF=NA
+chr1	35	rs4	C	CC	.	PASS	TYPE=frameshift;MAIN_ORF_EFF=N-terminal_extension
+chr1	38	rs5	T	A	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=out-of-frame_overlap
+chr1	128	rs6	A	T	.	PASS	TYPE=stop_lost;MAIN_CDS_EFF=overlap_extension
+chr1	131	rs7	G	A	.	PASS	TYPE=synonymous_variant;MAIN_ORF_EFF=NA;in_known_ORF
+chr1	155	rs18	T	G	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=out-of-frame_overlap
+chr1	162	rs19	AT	A	.	PASS	TYPE=frameshift_varant;MAIN_ORF_EFF=N-terminal_extension
+chr2	21	rs8	A	AT	.	PASS	TYPE=frameshift;MAIN_ORF_EFF=uORF_product_truncation
+chr2	30	rs9	T	A	.	PASS	TYPE=intronic_variant;MAIN_ORF_EFF=NA
+chr2	33	rs10	C	G	.	PASS	TYPE=missense_variant;MAIN_ORF_EFF=NA
+chr2	36	rs11	G	T	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=N-terminal_extension
+chr2	43	rs12	C	T	.	PASS	TYPE=variant_in_main_ORF;MAIN_ORF_EFF=stop_gained
+chr2	114	rs13	T	C	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=overlap_extension
+chr2	116	rs26	ACT	A	.	PASS	TYPE=splice_site_variant;MAIN_ORF_EFF=NA
+chr2	144	rs14	A	T	.	PASS	TYPE=stop_gained;MAIN_ORF_EFF=overlap_truncation
+chr2	144	rs22	AACCTCAT	T	.	PASS	TYPE=frameshift_variant&start_lost|frameshift_variant&stop_lost;MAIN_ORF_EFF=overlap_elimination|N-terminal_extension
+chr2	149	rs23	CA	C	.	PASS	TYPE=start_lost|frameshift_variant;MAIN_ORF_EFF=overlap_elimination|N-terminal_extension
+chr2	150	rs21	A	T	.	PASS	TYPE=start_lost|stop_lost;MAIN_ORF_EFF=overlap_elimination|out-of-frame_overlap
+chr2	151	rs15	T	A	.	PASS	TYPE=start_lost|synonymous_variant;MAIN_ORF_EFF=overlap_elimination|NA
+chr3	7	rs16	AA	A	.	PASS	TYPE=frameshift;MAIN_ORF_EFF=N-terminal_extension
+chr3	12	rs17	A	G	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=out-of-frame_overlap

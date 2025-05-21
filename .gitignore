@@ -1,8 +1,8 @@
-*.vcf
 *.tsv
 *.tsv.gz
 *.gtf
 *.out
+.idea/
 db_eval/
 .vscode/settings.json
 *.bak
