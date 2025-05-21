@@ -19,6 +19,7 @@ chr2	33	rs10	C	G	.	PASS	TYPE=missense_variant;MAIN_ORF_EFF=NA
 chr2	36	rs11	G	T	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=N-terminal_extension
 chr2	43	rs12	C	T	.	PASS	TYPE=variant_in_main_ORF;MAIN_ORF_EFF=stop_gained
 chr2	114	rs13	T	C	.	PASS	TYPE=stop_lost;MAIN_ORF_EFF=overlap_extension
+chr2	116	rs26	ACT	A	.	PASS	TYPE=splice_site_variant;MAIN_ORF_EFF=NA
 chr2	144	rs14	A	T	.	PASS	TYPE=stop_gained;MAIN_ORF_EFF=overlap_truncation
 chr2	144	rs22	AACCTCAT	T	.	PASS	TYPE=frameshift_variant&start_lost|frameshift_variant&stop_lost;MAIN_ORF_EFF=overlap_elimination|N-terminal_extension
 chr2	149	rs23	CA	C	.	PASS	TYPE=start_lost|frameshift_variant;MAIN_ORF_EFF=overlap_elimination|N-terminal_extension

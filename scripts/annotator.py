@@ -11,7 +11,7 @@ class UORFConsequence(Enum):
     DELETION_AND_STOP_LOST = "uorf_deletion_and_stop_lost"
     MISSENSE = "uorf_missense"
     SYNONYMOUS = "uorf_synonymous"
-    SPLICE_REGION = "uorf_splice_region"
+    SPLICE_SITE = "splice_site_variant"
     INFRAME_DELETION = "uorf_inframe_deletion"
     INFRAME_INSERTION = "uorf_inframe_insertion"
 
@@ -70,12 +70,12 @@ class VariantAnnotator:
             # TODO: uORF consequence is incorrectly reflected in BED due to usage of a frameshift handler here - consider revision
             UORFConsequence.DELETION_AND_STOP_LOST: self._handle_frameshift,
             UORFConsequence.STOP_GAINED: self._handle_stop_gained,
-            UORFConsequence.SPLICE_REGION: self._handle_splice_region,
+            UORFConsequence.SPLICE_SITE: self._handle_splice_region,
             UORFConsequence.INFRAME_DELETION: self._handle_inframe_indel,
             UORFConsequence.INFRAME_INSERTION: self._handle_inframe_indel,
         }
 
-    def determine_indel_boundaries(self, vcf_pos, ref_allele, alt_allele, strand):
+    def determine_deletion_boundaries(self, vcf_pos, ref_allele, alt_allele, strand):
         """
         Determine the start and end boundaries of an indel in genomic coordinates.
         
@@ -89,28 +89,13 @@ class VariantAnnotator:
             Tuple of (indel_start, indel_end) genomic positions
         """
         # Determine indel type
-        is_deletion = len(ref_allele) > len(alt_allele)
-        is_insertion = len(ref_allele) < len(alt_allele)
-
-        # TODO : Insertion cases have to be deleted here
-        if is_deletion:
-            # For deletions: start is VCF position, end is position + length of ref allele - 1
-            indel_start = vcf_pos
-            indel_end = vcf_pos + len(ref_allele) - 1
-        elif is_insertion:
-            # For insertions: both start and end are at the VCF position
-            # (as insertion occurs between positions)
-            indel_start = vcf_pos
-            indel_end = vcf_pos
-        else:
-            # For SNVs - simple case
-            indel_start = vcf_pos
-            indel_end = vcf_pos
+        indel_start = vcf_pos
+        indel_end = vcf_pos + len(ref_allele) - 1
         
         # Return genomic coordinates (same for both strands)
         return indel_start, indel_end
 
-    def check_uorf_boundary_intersection(self, indel_start, indel_end, uorf_start, uorf_end, strand):
+    def check_uorf_boundary_intersection(self, indel_start, indel_end, uorf_start, uorf_end, strand, exons):
         """
         Check how an indel intersects with uORF boundaries.
         
@@ -126,6 +111,29 @@ class VariantAnnotator:
         """
         # Check if indel intersects the uORF start boundary
         # Conditions below ensure inclusion of the start codon into the account when determining the overlap
+
+        # Testinf for exon boundary intersection
+        affects_splice_site = False
+        if strand == '-':
+            exons = reversed(exons)
+        for exon_number, exon in enumerate(exons):
+            if self.debug_mode:
+                logging.info(f"Looking for splice site effects, processing exon {exon.start}, coordinates {exon.genome_start}-{exon.genome_end}, indel boundaries are {indel_start}-{indel_end}")
+            if exon_number == 0 and strand == '+' and uorf_start < exon.genome_start:
+                overlaps_acceptor_site = False
+            else:
+                overlaps_acceptor_site = (indel_start < exon.genome_start and (exon.genome_start <= indel_end <= exon.genome_end))
+            if exon_number == 0 and strand == '-' and uorf_end > exon.genome_end:
+                overlaps_donor_site = False
+            else:
+                overlaps_donor_site = ((exon.genome_end >= indel_start >= exon.genome_start) and indel_end > exon.genome_end)
+            if self.debug_mode:
+                logging.info(f"Determined effects are {overlaps_acceptor_site} and {overlaps_donor_site}")
+            if overlaps_acceptor_site or overlaps_donor_site:
+                affects_splice_site = True
+                break
+
+
         if strand == '+':
             intersects_start = (indel_start < uorf_start + 3 and indel_end >= uorf_start)
         else:
@@ -149,6 +157,7 @@ class VariantAnnotator:
             logging.debug(f"Intersection analysis: start={intersects_start}, end={intersects_end}, inside={fully_inside}, encompasses={fully_encompasses}")
         
         return {
+            'affects_splice_site': affects_splice_site,
             'intersects_start': intersects_start,
             'intersects_end': intersects_end,
             'fully_inside': fully_inside,
@@ -173,7 +182,10 @@ class VariantAnnotator:
         consequence = None
         
         # Handle boundary intersections
-        if intersection_info['intersects_start']:
+        if intersection_info['affects_splice_site']:
+            consequence = UORFConsequence.SPLICE_SITE
+
+        elif intersection_info['intersects_start']:
             # if is_deletion:
             # Deletion crossing the start boundary - start loss
             if strand == "+":
@@ -231,7 +243,7 @@ class VariantAnnotator:
                 
                 if len(ref_allele) > 1 or len(alt_allele) > 1:
                     # Determine indel boundaries
-                    indel_start, indel_end = self.determine_indel_boundaries(
+                    indel_start, indel_end = self.determine_deletion_boundaries(
                         pos_genomic, ref_allele, alt_allele, strand
                     )
                     
@@ -240,7 +252,8 @@ class VariantAnnotator:
                         indel_start, indel_end,
                         variant_data['uorf_start_genomic'],
                         variant_data['uorf_end_genomic'],
-                        strand
+                        strand,
+                        self.transcript_obj.exons
                     )
                     
                     # Special handling for different types of boundary intersections
@@ -386,7 +399,7 @@ class VariantAnnotator:
             
             if len(ref_allele) > 1 or len(alt_allele) > 1:
                 # Determine indel boundaries
-                indel_start, indel_end = self.determine_indel_boundaries(
+                indel_start, indel_end = self.determine_deletion_boundaries(
                     pos_genomic, ref_allele, alt_allele, strand
                 )
                 
@@ -512,7 +525,7 @@ class VariantAnnotator:
             strand = variant_data.get('strand', '')
             
             # Determine indel boundaries
-            indel_start, indel_end = self.determine_indel_boundaries(
+            indel_start, indel_end = self.determine_deletion_boundaries(
                 pos_genomic, ref_allele, alt_allele, strand
             )
             
@@ -521,7 +534,8 @@ class VariantAnnotator:
                 indel_start, indel_end,
                 variant_data['uorf_start_genomic'],
                 variant_data['uorf_end_genomic'],
-                strand
+                strand,
+                self.transcript_obj.exons
             )
             
             # Check if indel crosses any boundary
@@ -699,13 +713,13 @@ class VariantAnnotator:
                 
                 if len(ref_allele) > 1 or len(alt_allele) > 1:
                     # Determine indel boundaries in genomic coordinates
-                    indel_start, indel_end = self.determine_indel_boundaries(
+                    indel_start, indel_end = self.determine_deletion_boundaries(
                         pos_genomic, ref_allele, alt_allele, strand
                     )
                     
                     # Check intersection with uORF boundaries
                     intersection_info = self.check_uorf_boundary_intersection(
-                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand, self.transcript_obj.exons
                     )
                     
                     if self.debug_mode:
@@ -935,7 +949,7 @@ class VariantAnnotator:
                 strand = variant_data.get('strand', '')
                 
                 # Determine indel boundaries
-                indel_start, indel_end = self.determine_indel_boundaries(
+                indel_start, indel_end = self.determine_deletion_boundaries(
                     pos_genomic, ref, alt, strand
                 )
                 
@@ -944,7 +958,8 @@ class VariantAnnotator:
                     indel_start, indel_end,
                     variant_data['uorf_start_genomic'],
                     variant_data['uorf_end_genomic'],
-                    strand
+                    strand,
+                    self.transcript_obj.exons
                 )
                 
                 is_boundary_crossing = (intersection_info['intersects_start'] or 
@@ -1105,13 +1120,13 @@ class VariantAnnotator:
                 # For indels that cause frameshift, check if they intersect uORF boundaries
                 if uorf_start_genomic and uorf_end_genomic:
                     # Determine indel boundaries in genomic coordinates
-                    indel_start, indel_end = self.determine_indel_boundaries(
+                    indel_start, indel_end = self.determine_deletion_boundaries(
                         pos_genomic, ref, alt, strand
                     )
 
                     # Check intersection with uORF boundaries
                     intersection_info = self.check_uorf_boundary_intersection(
-                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand, self.transcript_obj.exons
                     )
 
                     # If indel intersects boundaries, determine specific consequence
@@ -1140,13 +1155,13 @@ class VariantAnnotator:
                 # that might intersect with uORF boundaries
                 if uorf_start_genomic and uorf_end_genomic and (len(ref) > 1 or len(alt) > 1):
                     # Determine indel boundaries in genomic coordinates
-                    indel_start, indel_end = self.determine_indel_boundaries(
+                    indel_start, indel_end = self.determine_deletion_boundaries(
                         pos_genomic, ref, alt, strand
                     )
                     
                     # Check intersection with uORF boundaries
                     intersection_info = self.check_uorf_boundary_intersection(
-                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand
+                        indel_start, indel_end, uorf_start_genomic, uorf_end_genomic, strand, self.transcript_obj.exons
                     )
                     
                     # If indel intersects boundaries, determine specific consequence
