@@ -43,7 +43,7 @@ conda activate uorf-variant-analysis
 ### Basic Usage
 
 ```bash
-python pipeline.py --bed path/to/uorfs.bed --vcf path/to/variants.vcf \
+python uorf_annotator.py --bed path/to/uorfs.bed --vcf path/to/variants.vcf \
                   --gtf path/to/annotation.gtf --fasta path/to/genome.fa \
                   --output-prefix results/output
 ```
@@ -98,13 +98,13 @@ Standard GTF format with gene annotations. The file must include CDS and exon fe
 
 ### Module Overview
 
-- **pipeline.py**: Main entry point for the pipeline
-- **parsers.py**: Parsers for GTF and other genomic file formats
-- **converters.py**: Handles conversion between genomic and transcript coordinates
-- **processors.py**: Processes variants to determine their effects
-- **annotator.py**: Annotates variants with biological consequences
-- **models.py**: Data structures for genomic and transcript features
-- **transcript_sequence.py**: Handles transcript sequences and uORF extraction
+- **uorf_annotator.py**: Main entry point for the pipeline
+- **scripts/parsers.py**: Parsers for GTF and other genomic file formats
+- **scripts/converters.py**: Handles conversion between genomic and transcript coordinates
+- **scripts/processors.py**: Processes variants to determine their effects
+- **scripts/annotator.py**: Annotates variants with biological consequences
+- **scripts/models.py**: Data structures for genomic and transcript features
+- **scripts/transcript_sequence.py**: Handles transcript sequences and uORF extraction
 
 ### Key Classes
 
@@ -151,7 +151,7 @@ Predicts how the uORF variant affects the main CDS:
 ### Example 1: Analyze variants with default settings
 
 ```bash
-python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+python uorf_annotator.py --bed data/uorfs.bed --vcf data/variants.vcf \
                   --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
                   --output-prefix results/all_variants
 ```
@@ -159,7 +159,7 @@ python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
 ### Example 2: Analyze only variants in ATG-start uORFs
 
 ```bash
-python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+python uorf_annotator.py --bed data/uorfs.bed --vcf data/variants.vcf \
                   --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
                   --output-prefix results/atg_uorf_variants --uorf-type ATG
 ```
@@ -167,7 +167,7 @@ python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
 ### Example 3: Exclude variants that fall within main CDS
 
 ```bash
-python pipeline.py --bed data/uorfs.bed --vcf data/variants.vcf \
+python uorf_annotator.py --bed data/uorfs.bed --vcf data/variants.vcf \
                   --gtf data/gencode.v38.annotation.gtf --fasta data/GRCh38.p13.genome.fa \
                   --output-prefix results/non_cds_variants --exclude-maincds-variants
 ```
